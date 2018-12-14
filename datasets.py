@@ -39,17 +39,25 @@ class MultiseqDataset(Dataset):
         
         # Load filenames into lists
         paths = dict()
-        dirs = dict(zip(modalities, dirs))
         for i, m in enumerate(self.modalities):
-            paths[m] = [os.path.join(dirs[i], fn) for fn
-                        in sorted(os.listdir(dirs[i]))
-                        if re.match(self.regex[i], fn) is not None]
+            paths[m] = []
+            groups = []
+            for fn in os.listdir(dirs[i]):
+                match = re.match(self.regex[i], fn)
+                if not match:
+                    continue
+                paths[m].append(os.path.join(dirs[i], fn))
+                groups.append(match.groups())
+            # Sort by values of captured groups
+            paths[m] = [p for _, p in sorted(zip(groups, paths[m]))]
+        self.indices = list(sorted(groups))
 
         # Check that number of files/sequences are equal
         self.n_seq = len(paths[self.modalities[0]])
         for m in self.modalities:
             if len(paths[m]) != self.n_seq:
-                raise Exception("Number of files do not match.")
+                raise Exception("Number of files ({}) do not match.".\
+                                format(len(paths[m])))
 
         # Compute ratio to base rate
         self.ratios = {m: int(r/self.base_rate) for m, r in
@@ -64,7 +72,7 @@ class MultiseqDataset(Dataset):
             for m, data in self.data.iteritems():
                 fp = paths[m][i]
                 # Use pandas to read CSV files
-                if re.match("^.*\.csv", fp):
+                if re.match("^.*\.(csv|txt)", fp):
                     d = np.array(pd.read_csv(fp))
                 else: 
                     d = np.load(fp)
@@ -73,9 +81,13 @@ class MultiseqDataset(Dataset):
                     d = d.reshape(d.shape[0], -1)
                 # Time average so that data is at base rate
                 ratio = self.ratios[m]
-                end = ratio * len(d)//ratio
+                end = ratio * (len(d)//ratio)
                 avg = np.mean(d[:end].reshape(-1, ratio, d.shape[1]), axis=1)
-                d = np.concatenate(avg, d[end:].mean(axis=0)[np.newaxis,:])
+                if end < len(d):
+                    remain = d[end:].mean(axis=0)[np.newaxis,:]
+                    d = np.concatenate([avg, remain])
+                else:
+                    d = avg
                 data.append(d)
                 if len(d) < seq_len:
                     seq_len = len(d)
@@ -194,3 +206,40 @@ def seq_collate_dict(data):
         batch[m] = pad_and_merge(m_data, max(lengths))
     mask = len_to_mask(lengths)
     return batch, mask, lengths
+
+if __name__ == "__main__":
+    # Test code by loading dataset
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dir', type=str, default="./data",
+                        help='data directory')
+    parser.add_argument('--subset', type=str, default="Train",
+                        help='whether to load Train/Valid/Test data')
+    args = parser.parse_args()
+
+    modalities = ['acoustic', 'emotient', 'ratings']
+    dirs = []
+    dirs.append(os.path.join(args.dir, 'features', args.subset, 'acoustic'))
+    dirs.append(os.path.join(args.dir, 'features', args.subset, 'emotient'))
+    dirs.append(os.path.join(args.dir, 'ratings', args.subset, 'target'))
+    regex = ["ID(\d+)_vid(\d+)_.*\.csv",
+             "ID(\d+)_vid(\d+)_.*\.txt",
+             "target_(\d+)_(\d+)_.*\.csv"]
+    rates = [2, 30, 2]
+    
+    print("Loading data...")
+    dataset = MultiseqDataset(modalities, dirs, regex, rates)
+    print("Testing batch collation...")
+    data = seq_collate([dataset[i] for i in range(min(10, len(dataset)))])
+    print("Batch shapes:")
+    for d in data[:-1]:
+        print(d.shape)
+    print("Sequence lengths: ", data[-1])
+    print("Checking through data for mismatched sequence lengths...")
+    for i, data in enumerate(dataset):
+        print("Subject, Video: ", dataset.indices[i])
+        acoustic, emotient, ratings = data
+        print(acoustic.shape, emotient.shape, ratings.shape)
+        if not (len(acoustic) == len(emotient) and
+                len(emotient) == len(ratings)):
+            print("WARNING: Mismatched sequence lengths.")
