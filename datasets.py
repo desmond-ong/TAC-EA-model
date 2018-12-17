@@ -11,17 +11,16 @@ from torch.utils.data import Dataset
 class MultiseqDataset(Dataset):
     """Multimodal dataset for time series and sequential data."""
     
-    def __init__(self, modalities=None, dirs=None, regex=None,
-                 rates=None, base_rate=None, preprocess=None,
-                 truncate=False, item_as_dict=False):
+    def __init__(self, modalities, dirs, regex, preprocess, rates,
+                 base_rate=None, truncate=False, item_as_dict=False):
         """Loads valence ratings and features for each modality.
 
         modalities -- names of each input modality
         dirs -- list of directories containing input features
         regex -- regex patterns for the filenames of each modality
+        preprocess -- data pre-processing functions for pandas dataframes
         rates -- sampling rates of each modality
         base_rate -- base_rate to subsample to
-        preprocess -- data pre-processing functions for pandas dataframes
         truncate -- if true, truncate to modality with minimum length
         item_as_dict -- whether to return data as dictionary
         """
@@ -219,6 +218,33 @@ def seq_collate_dict(data):
     mask = len_to_mask(lengths)
     return batch, mask, lengths
 
+def load_dataset(modalities, base_dir, subset,
+                 base_rate=None, truncate=False, item_as_dict=False):
+    """Helper function specifically for loading TAC-EA datasets."""
+    dirs = {
+        'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
+        'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
+        'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
+    }
+    regex = {
+        'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
+        'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
+        'ratings' : "target_(\d+)_(\d+)_.*\.csv"
+    }
+    rates = {'acoustic': 2, 'emotient': 30, 'ratings': 2}
+    preprocess = {
+        'acoustic': lambda df : df.drop(columns=['frameIndex', ' frameTime']),
+        'emotient': lambda df : df.drop(columns=['Frametime']),
+        'ratings' : lambda df : df.drop(columns=['time'])
+    }
+    if 'ratings' not in modalities:
+        modalities.append('ratings')
+    return MultiseqDataset(modalities, [dirs[m] for m in modalities],
+                           [regex[m] for m in modalities],
+                           [preprocess[m] for m in modalities],
+                           [rates[m] for m in modalities],
+                           base_rate, truncate, item_as_dict)
+
 if __name__ == "__main__":
     # Test code by loading dataset
     import argparse
@@ -229,27 +255,9 @@ if __name__ == "__main__":
                         help='whether to load Train/Valid/Test data')
     args = parser.parse_args()
 
-    modalities = ['acoustic', 'emotient', 'ratings']
-    dirs = [
-        os.path.join(args.dir, 'features', args.subset, 'acoustic'),
-        os.path.join(args.dir, 'features', args.subset, 'emotient'),
-        os.path.join(args.dir, 'ratings', args.subset, 'target')
-    ]
-    regex = [
-        "ID(\d+)_vid(\d+)_.*\.csv",
-        "ID(\d+)_vid(\d+)_.*\.txt",
-        "target_(\d+)_(\d+)_.*\.csv"
-    ]
-    rates = [2, 30, 2]
-    preprocess = [
-        lambda df : df.drop(columns=['frameIndex', ' frameTime']),
-        lambda df : df.drop(columns=['Frametime']),
-        lambda df : df.drop(columns=['time'])
-    ]
-    
     print("Loading data...")
-    dataset = MultiseqDataset(modalities, dirs, regex, rates,
-                              preprocess=preprocess)
+    modalities = ['acoustic', 'emotient', 'ratings']
+    dataset = load_dataset(modalities, args.dir, args.subset)
     print("Testing batch collation...")
     data = seq_collate([dataset[i] for i in range(min(10, len(dataset)))])
     print("Batch shapes:")

@@ -106,7 +106,7 @@ class MultiLSTM(nn.Module):
 if __name__ == "__main__":
     # Test code by loading dataset and running through model
     import os, argparse
-    from datasets import MultiseqDataset, seq_collate_dict
+    from datasets import load_dataset, seq_collate_dict
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--dir', type=str, default="./data",
@@ -115,28 +115,10 @@ if __name__ == "__main__":
                         help='whether to load Train/Valid/Test data')
     args = parser.parse_args()
 
-    modalities = ['acoustic', 'emotient', 'ratings']
-    dirs = [
-        os.path.join(args.dir, 'features', args.subset, 'acoustic'),
-        os.path.join(args.dir, 'features', args.subset, 'emotient'),
-        os.path.join(args.dir, 'ratings', args.subset, 'target')
-    ]
-    regex = [
-        "ID(\d+)_vid(\d+)_.*\.csv",
-        "ID(\d+)_vid(\d+)_.*\.txt",
-        "target_(\d+)_(\d+)_.*\.csv"
-    ]
-    rates = [2, 30, 2]
-    preprocess = [
-        lambda df : df.drop(columns=['frameIndex', ' frameTime']),
-        lambda df : df.drop(columns=['Frametime']),
-        lambda df : df.drop(columns=['time'])
-    ]
-    
     print("Loading data...")
-    dataset = MultiseqDataset(modalities, dirs, regex, rates,
-                              preprocess=preprocess, truncate=True,
-                              item_as_dict=True)
+    dataset = load_dataset(['acoustic', 'emotient', 'ratings'],
+                           args.dir, args.subset, truncate=True,
+                           item_as_dict=True)
     print("Building model...")
     model = MultiLSTM(['acoustic', 'emotient'], [988, 31],
                       device=torch.device('cpu'))
