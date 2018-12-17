@@ -31,7 +31,8 @@ class MultiLSTM(nn.Module):
         # Create raw-to-embed FC+Dropout layer for each modality
         self.embed = dict()
         for m in self.modalities:
-            self.embed[m] = nn.Sequential(nn.Linear(self.dims[m], embed_dim),
+            self.embed[m] = nn.Sequential(nn.Dropout(),
+                                          nn.Linear(self.dims[m], embed_dim),
                                           nn.ReLU())
             self.add_module('embed_{}'.format(m), self.embed[m])
         # Layer that computes attention from embeddings

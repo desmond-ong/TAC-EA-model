@@ -145,10 +145,11 @@ class MultiseqDataset(Dataset):
     def split_(self, n):
         """Splits each sequence into n chunks (in place)."""
         for m in self.modalities:
-            self.seq_ids = list(itertools.chain.from_iterable(
-                [[i] * n for i in self.seq_ids]))
             self.data[m] = list(itertools.chain.from_iterable(
                 [np.array_split(a, n, 0) for a in self.data[m]]))
+        self.seq_ids = list(itertools.chain.from_iterable(
+            [[i] * n for i in self.seq_ids]))
+        self.lengths = [len(d) for d in self.data[self.modalities[0]]]
 
     def split(self, n):
         """Splits each sequence into n chunks (returns new dataset)."""
@@ -238,7 +239,7 @@ def load_dataset(modalities, base_dir, subset,
         'ratings' : lambda df : df.drop(columns=['time'])
     }
     if 'ratings' not in modalities:
-        modalities.append('ratings')
+        modalities = modalities + ['ratings']
     return MultiseqDataset(modalities, [dirs[m] for m in modalities],
                            [regex[m] for m in modalities],
                            [preprocess[m] for m in modalities],
