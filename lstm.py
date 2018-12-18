@@ -18,7 +18,7 @@ class MultiLSTM(nn.Module):
     """
     
     def __init__(self, modalities, dims, embed_dim=128, hidden_dim=512,
-                 n_layers=1, attn_len=3, device=torch.device('cuda:0')):
+                 n_layers=1, attn_len=1, device=torch.device('cuda:0')):
         super(MultiLSTM, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
@@ -31,7 +31,7 @@ class MultiLSTM(nn.Module):
         # Create raw-to-embed FC+Dropout layer for each modality
         self.embed = dict()
         for m in self.modalities:
-            self.embed[m] = nn.Sequential(nn.Dropout(),
+            self.embed[m] = nn.Sequential(nn.Dropout(0.1),
                                           nn.Linear(self.dims[m], embed_dim),
                                           nn.ReLU())
             self.add_module('embed_{}'.format(m), self.embed[m])

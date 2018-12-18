@@ -81,13 +81,16 @@ class MultiseqDataset(Dataset):
             # Load each input modality
             for m, data in self.data.iteritems():
                 fp = paths[m][i]
-                if re.match("^.*\.(csv|txt)", fp):
+                if re.match("^.*\.npy", fp):
+                    # Load as numpy array
+                    d = np.load(fp)
+                elif re.match("^.*\.(csv|txt)", fp):
                     # Use pandas to read and pre-process CSV files
                     d = pd.read_csv(fp)
                     d = np.array(preprocess[m](d))
-                else:
-                    # Otherwise load as numpy array
-                    d = np.load(fp)
+                elif re.match("^.*\.tsv", fp):
+                    d = pd.read_csv(fp, sep='\t')
+                    d = np.array(preprocess[m](d))
                 # Flatten inputs
                 if len(d.shape) > 2:
                     d = d.reshape(d.shape[0], -1)
@@ -224,17 +227,20 @@ def load_dataset(modalities, base_dir, subset,
     """Helper function specifically for loading TAC-EA datasets."""
     dirs = {
         'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
+        'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
         'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
         'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
     }
     regex = {
         'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
+        'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
         'ratings' : "target_(\d+)_(\d+)_.*\.csv"
     }
-    rates = {'acoustic': 2, 'emotient': 30, 'ratings': 2}
+    rates = {'acoustic': 2, 'linguistic': 0.2, 'emotient': 30, 'ratings': 2}
     preprocess = {
         'acoustic': lambda df : df.drop(columns=['frameIndex', ' frameTime']),
+        'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
         'emotient': lambda df : df.drop(columns=['Frametime']),
         'ratings' : lambda df : df.drop(columns=['time'])
     }
@@ -257,19 +263,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print("Loading data...")
-    modalities = ['acoustic', 'emotient', 'ratings']
+    modalities = ['acoustic', 'linguistic', 'emotient', 'ratings']
     dataset = load_dataset(modalities, args.dir, args.subset)
     print("Testing batch collation...")
     data = seq_collate([dataset[i] for i in range(min(10, len(dataset)))])
     print("Batch shapes:")
-    for d in data[:-1]:
+    for d in data[:-2]:
         print(d.shape)
     print("Sequence lengths: ", data[-1])
     print("Checking through data for mismatched sequence lengths...")
     for i, data in enumerate(dataset):
         print("Subject, Video: ", dataset.seq_ids[i])
-        acoustic, emotient, ratings = data
-        print(acoustic.shape, emotient.shape, ratings.shape)
-        if not (len(acoustic) == len(emotient) and
+        acoustic, linguistic, emotient, ratings = data
+        print(acoustic.shape, linguistic.shape, emotient.shape, ratings.shape)
+        if not (len(acoustic) == len(ratings) and
+                len(linguistic) == len(ratings) and 
                 len(emotient) == len(ratings)):
             print("WARNING: Mismatched sequence lengths.")

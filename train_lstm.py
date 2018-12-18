@@ -96,7 +96,7 @@ def evaluate(dataset, model, criterion, args):
             args.axes[i].cla()
             args.axes[i].plot(true, 'b-')
             args.axes[i].plot(pred, 'c-')
-            args.axes[i].set_ylim(-1, 1)
+            args.axes[i].set_ylim(0, 1)
             args.axes[i].set_title("CCC = {:0.3f}".format(c))
         plt.tight_layout()
         plt.draw()
@@ -172,13 +172,13 @@ def main(args):
         args.modalities = checkpoint['modalities']
     elif args.modalities is None:
         # Default to acoustic if unspecified
-        args.modalities = ['acoustic']
+        args.modalities = ['acoustic', 'linguistic']
 
     # Load data for specified modalities
     train_data, test_data = load_data(args.modalities, args.data_dir)
     
     # Construct multimodal LSTM model
-    dims = {'acoustic': 988, 'emotient': 31}
+    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
     model = MultiLSTM(args.modalities, dims=(dims[m] for m in args.modalities),
                       device=args.device)
     if checkpoint is not None:
@@ -262,11 +262,11 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--modalities', type=str, default=None, nargs='+',
-                        help='input modalities (default: acoustic only)')
+                        help='input modalities (default: acoustic-linguistic')
     parser.add_argument('--batch_size', type=int, default=25, metavar='N',
                         help='input batch size for training (default: 25)')
-    parser.add_argument('--split', type=int, default=5, metavar='N',
-                        help='sections to split each video into (default: 5)')
+    parser.add_argument('--split', type=int, default=1, metavar='N',
+                        help='sections to split each video into (default: 1)')
     parser.add_argument('--epochs', type=int, default=1000, metavar='N',
                         help='number of epochs to train (default: 1000)')
     parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
