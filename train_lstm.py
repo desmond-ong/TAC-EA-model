@@ -10,6 +10,7 @@ import argparse
 import pandas as pd
 import numpy as np
 from scipy.stats import pearsonr
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
@@ -64,7 +65,7 @@ def train(loader, model, criterion, optimizer, epoch, args):
 def evaluate(dataset, model, criterion, args):
     predictions = []
     data_num = 0
-    loss, corr, ccc = 0.0, 0.0, 0.0
+    loss, corr, ccc = 0.0, [], []
     model.eval()
     for data in dataset:
         # Collate data into batch dictionary of size 1
@@ -82,13 +83,28 @@ def evaluate(dataset, model, criterion, args):
         # Store predictions
         pred = output[0,:data['length']].view(-1).cpu().numpy()
         predictions.append(pred)
-        # Compute CCC of predictions against ratings
-        corr += pearsonr(data['ratings'].reshape(-1), pred)[0]
-        ccc += eval_ccc(data['ratings'].reshape(-1), pred)
+        # Compute correlation and CCC of predictions against ratings
+        corr.append(pearsonr(data['ratings'].reshape(-1), pred)[0])
+        ccc.append(eval_ccc(data['ratings'].reshape(-1), pred))
+    # Plot predictions against ratings for best fit
+    if args.visualize:
+        top_idx = np.argsort(ccc)[-4:][::-1]
+        top_ccc = [ccc[i] for i in top_idx]
+        top_true = [dataset[i]['ratings'] for i in top_idx]
+        top_pred = [predictions[i] for i in top_idx]
+        for i, (true, pred, c) in enumerate(zip(top_true, top_pred, top_ccc)):
+            args.axes[i].cla()
+            args.axes[i].plot(true, 'b-')
+            args.axes[i].plot(pred, 'c-')
+            args.axes[i].set_ylim(-1, 1)
+            args.axes[i].set_title("CCC = {:0.3f}".format(c))
+        plt.tight_layout()
+        plt.draw()
+        plt.pause(0.001)
     # Average losses and print
     loss /= data_num
-    corr /= len(dataset)
-    ccc /= len(dataset)
+    corr = sum(corr) / len(corr)
+    ccc = sum(ccc) / len(ccc)
     print('Evaluation\tLoss: {:2.5f}\tCorr: {:0.3f}\tCCC: {:0.3f}'.\
           format(loss, corr, ccc))
     return predictions, loss, corr, ccc
@@ -175,7 +191,11 @@ def main(args):
     # Create path to save models/predictions/features
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
-    
+
+    # Create figure to visualize predictions
+    if args.visualize:
+        args.fig, args.axes = plt.subplots(4, 1, figsize=(4,8))
+        
     # Evaluate model if test flag is set
     if args.test:
         # Create paths to save features
@@ -213,7 +233,7 @@ def main(args):
     # Batch data using data loaders
     train_loader = DataLoader(train_data, batch_size=args.batch_size,
                               shuffle=True, collate_fn=seq_collate_dict)
-    
+   
     # Train and save best model
     best_ccc = -1
     for epoch in range(1, args.epochs + 1):
@@ -257,6 +277,8 @@ if __name__ == "__main__":
                         help='save every N epochs (default: 10)')
     parser.add_argument('--device', type=str, default='cuda:0',
                         help='device to use (default: cuda:0 if available)')
+    parser.add_argument('--visualize', action='store_true', default=False,
+                        help='flag to visualize predictions (default: false)')
     parser.add_argument('--normalize', action='store_true', default=False,
                         help='whether to normalize inputs (default: false)')
     parser.add_argument('--features', action='store_true', default=False,
