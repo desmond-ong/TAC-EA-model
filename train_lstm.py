@@ -19,7 +19,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from datasets import seq_collate_dict, load_dataset
-from lstm import MultiLSTM
+from lstm import MultiLSTM, MultiARLSTM
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -41,7 +41,7 @@ def train(loader, model, criterion, optimizer, epoch, args):
         for m in data_dict.keys():
             data_dict[m] = data_dict[m].to(args.device)
         # Run forward pass.
-        output = model(data_dict, mask, lengths)
+        output = model(data_dict, mask, lengths, target=data_dict['ratings'])
         # Compute loss and gradients
         batch_loss = criterion(output, data_dict['ratings'])
         # Accumulate total loss for epoch
@@ -179,8 +179,9 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
-    model = MultiLSTM(args.modalities, dims=(dims[m] for m in args.modalities),
-                      device=args.device)
+    model = MultiARLSTM(args.modalities,
+                        dims=(dims[m] for m in args.modalities),
+                        device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
