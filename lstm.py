@@ -112,10 +112,12 @@ class MultiARLSTM(nn.Module):
     hidden_dim -- dimensions of LSTM hidden state
     n_layers -- number of LSTM layers
     attn_len -- length of local attention window
+    ar_order -- autoregressive order (i.e. length of AR window)
     """
     
     def __init__(self, modalities, dims, embed_dim=128, hidden_dim=512,
-                 n_layers=1, attn_len=1, device=torch.device('cuda:0')):
+                 n_layers=1, attn_len=1, ar_order=1,
+                 device=torch.device('cuda:0')):
         super(MultiARLSTM, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
@@ -124,6 +126,7 @@ class MultiARLSTM(nn.Module):
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.attn_len = attn_len
+        self.ar_order = ar_order
         
         # Create raw-to-embed FC+Dropout layer for each modality
         self.embed = dict()
@@ -132,7 +135,7 @@ class MultiARLSTM(nn.Module):
                                           nn.Linear(self.dims[m], embed_dim),
                                           nn.ReLU())
             self.add_module('embed_{}'.format(m), self.embed[m])
-        # Layer that computes attention from embeddings
+        # Computes attention from embeddings
         self.attn = nn.Sequential(nn.Linear(self.n_mods*embed_dim, embed_dim),
                                   nn.ReLU(),
                                   nn.Linear(embed_dim, attn_len),
@@ -140,14 +143,12 @@ class MultiARLSTM(nn.Module):
         # LSTM computes hidden states from embeddings for each modality
         self.lstm = nn.LSTM(self.n_mods*embed_dim, hidden_dim,
                             n_layers, batch_first=True)
-        # Decodes LSTM hidden states into contribution of output term
+        # Decodes LSTM hidden states into contribution to output term
         self.decoder = nn.Sequential(nn.Linear(hidden_dim, embed_dim),
                                      nn.ReLU(),
                                      nn.Linear(embed_dim, 1))
         # Computes autoregressive weight on previous output
-        self.autoreg = nn.Sequential(nn.Linear(hidden_dim, embed_dim),
-                                     nn.ReLU(),
-                                     nn.Linear(embed_dim, 1))
+        self.autoreg = nn.Linear(hidden_dim, ar_order)
         # Store module in specified device (CUDA/CPU)
         self.device = (device if torch.cuda.is_available() else
                        torch.device('cpu'))
@@ -185,17 +186,25 @@ class MultiARLSTM(nn.Module):
         # Decode the context for each time step
         in_part = self.decoder(context).view(batch_size, seq_len, 1)
         # Compute autoregression weights
-        ar_weight = self.autoreg(context).view(batch_size, seq_len, 1)
+        ar_weight = self.autoreg(context)
+        ar_weight = ar_weight.reshape(batch_size, seq_len, self.ar_order)
         # Compute predictions as autoregressive sum
         if target is not None:
-            predicted = in_part + ar_weight * pad_shift(target, 1, tgt_init)
+            # Use teacher forcing
+            ar_stacked = torch.stack([pad_shift(target, i) for
+                                      i in range(self.ar_order)], dim=-1)
+            ar_part = torch.sum(ar_weight.unsqueeze(2) * ar_stacked, dim=-1)
+            predicted = in_part + ar_part
         else:
-            p = torch.ones(batch_size, 1, 1).to(self.device) * tgt_init
-            predicted = []
+            # Otherwise use own predictions
+            p_init = torch.ones(batch_size,1,1).to(self.device) * tgt_init
+            predicted = [p_init] * self.ar_order
             for t in range(seq_len):
-                p = in_part[:,t,:] + ar_weight[:,t,:] * p
+                ar_hist = torch.cat(predicted[-self.ar_order:], dim=2)
+                ar_part = torch.sum(ar_weight[:,t,:] * ar_hist, dim=2)
+                p = in_part[:,t,:] + ar_part.unsqueeze(-1)
                 predicted.append(p)
-            predicted = torch.cat(predicted, 1)
+            predicted = torch.cat(predicted[self.ar_order:], dim=1)
         # Mask predicted entries that exceed sequence lengths
         predicted = predicted * mask.float()
         return predicted
