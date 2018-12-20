@@ -17,25 +17,31 @@ def pad_shift(x, shift, padv=0.0):
     else:
         return x
 
+def convolve(x, attn):
+    """Convolve 3D tensor (x) with local attention weights (attn)."""
+    stacked = torch.stack([pad_shift(x, i) for
+                           i in range(attn.shape[2])], dim=-1)
+    return torch.sum(attn.unsqueeze(2) * stacked, dim=-1)
+    
 class MultiLSTM(nn.Module):
     """Multimodal LSTM model with feature level fusion.
 
     modalities -- list of names of each input modality
     dims -- list of dimensions for input modalities
     embed_dim -- dimensions of embedding for feature-level fusion
-    hidden_dim -- dimensions of LSTM hidden state
+    h_dim -- dimensions of LSTM hidden state
     n_layers -- number of LSTM layers
     attn_len -- length of local attention window
     """
     
-    def __init__(self, modalities, dims, embed_dim=128, hidden_dim=512,
+    def __init__(self, modalities, dims, embed_dim=128, h_dim=512,
                  n_layers=1, attn_len=3, device=torch.device('cuda:0')):
         super(MultiLSTM, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
         self.dims = dict(zip(modalities, dims))
         self.embed_dim = embed_dim
-        self.hidden_dim = hidden_dim
+        self.h_dim = h_dim
         self.n_layers = n_layers
         self.attn_len = attn_len
         
@@ -52,10 +58,10 @@ class MultiLSTM(nn.Module):
                                   nn.Linear(embed_dim, attn_len),
                                   nn.Softmax(dim=1))
         # LSTM computes hidden states from embeddings for each modality
-        self.lstm = nn.LSTM(self.n_mods*embed_dim, hidden_dim,
+        self.lstm = nn.LSTM(self.n_mods*embed_dim, h_dim,
                             n_layers, batch_first=True)
         # Regression network from LSTM hidden states to predicted valence
-        self.decoder = nn.Sequential(nn.Linear(hidden_dim, embed_dim),
+        self.decoder = nn.Sequential(nn.Linear(h_dim, embed_dim),
                                      nn.ReLU(),
                                      nn.Linear(embed_dim, 1))
         # Store module in specified device (CUDA/CPU)
@@ -77,21 +83,17 @@ class MultiLSTM(nn.Module):
         # Pack the input to mask padded entries
         embed = pack_padded_sequence(embed, lengths, batch_first=True)
         # Set initial hidden and cell states
-        h0 = torch.zeros(self.n_layers, batch_size,
-                         self.hidden_dim).to(self.device)
-        c0 = torch.zeros(self.n_layers, batch_size,
-                         self.hidden_dim).to(self.device)
+        h0 = torch.zeros(self.n_layers, batch_size, self.h_dim).to(self.device)
+        c0 = torch.zeros(self.n_layers, batch_size, self.h_dim).to(self.device)
         # Forward propagate LSTM
         h, _ = self.lstm(embed, (h0, c0))
         # Undo the packing
         h, _ = pad_packed_sequence(h, batch_first=True)
         # Convolve output with attention weights
         # i.e. out[t] = a[t,0]*in[t] + ... + a[t,win_len-1]*in[t-(win_len-1)]
-        stacked = torch.stack([pad_shift(h, i) for
-                               i in range(self.attn_len)], dim=-1)
-        context = torch.sum(attn.unsqueeze(2) * stacked, dim=-1)
+        context = convolve(h, attn)
         # Flatten temporal dimension
-        context = context.reshape(-1, self.hidden_dim)
+        context = context.reshape(-1, self.h_dim)
         # Return features before final FC layer if flag is set
         if output_features:
             features = self.decoder[0](context)
@@ -109,21 +111,20 @@ class MultiARLSTM(nn.Module):
     modalities -- list of names of each input modality
     dims -- list of dimensions for input modalities
     embed_dim -- dimensions of embedding for feature-level fusion
-    hidden_dim -- dimensions of LSTM hidden state
+    h_dim -- dimensions of LSTM hidden state
     n_layers -- number of LSTM layers
     attn_len -- length of local attention window
     ar_order -- autoregressive order (i.e. length of AR window)
     """
     
-    def __init__(self, modalities, dims, embed_dim=128, hidden_dim=512,
-                 n_layers=1, attn_len=3, ar_order=1,
-                 device=torch.device('cuda:0')):
+    def __init__(self, modalities, dims, embed_dim=128, h_dim=256, n_layers=1,
+                 attn_len=1, ar_order=1, device=torch.device('cuda:0')):
         super(MultiARLSTM, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
         self.dims = dict(zip(modalities, dims))
         self.embed_dim = embed_dim
-        self.hidden_dim = hidden_dim
+        self.h_dim = h_dim
         self.n_layers = n_layers
         self.attn_len = attn_len
         self.ar_order = ar_order
@@ -141,14 +142,14 @@ class MultiARLSTM(nn.Module):
                                   nn.Linear(embed_dim, attn_len),
                                   nn.Softmax(dim=1))
         # LSTM computes hidden states from embeddings for each modality
-        self.lstm = nn.LSTM(self.n_mods*embed_dim, hidden_dim,
+        self.lstm = nn.LSTM(self.n_mods*embed_dim, h_dim,
                             n_layers, batch_first=True)
         # Decodes LSTM hidden states into contribution to output term
-        self.decoder = nn.Sequential(nn.Linear(hidden_dim, embed_dim),
+        self.decoder = nn.Sequential(nn.Linear(h_dim, embed_dim),
                                      nn.ReLU(),
                                      nn.Linear(embed_dim, 1))
         # Computes autoregressive weight on previous output
-        self.autoreg = nn.Linear(hidden_dim, ar_order)
+        self.autoreg = nn.Linear(h_dim, ar_order)
         # Store module in specified device (CUDA/CPU)
         self.device = (device if torch.cuda.is_available() else
                        torch.device('cpu'))
@@ -168,21 +169,17 @@ class MultiARLSTM(nn.Module):
         # Pack the input to mask padded entries
         embed = pack_padded_sequence(embed, lengths, batch_first=True)
         # Set initial hidden and cell states
-        h0 = torch.zeros(self.n_layers, batch_size,
-                         self.hidden_dim).to(self.device)
-        c0 = torch.zeros(self.n_layers, batch_size,
-                         self.hidden_dim).to(self.device)
+        h0 = torch.zeros(self.n_layers, batch_size, self.h_dim).to(self.device)
+        c0 = torch.zeros(self.n_layers, batch_size, self.h_dim).to(self.device)
         # Forward propagate LSTM
         h, _ = self.lstm(embed, (h0, c0))
         # Undo the packing
         h, _ = pad_packed_sequence(h, batch_first=True)
         # Convolve output with attention weights
         # i.e. out[t] = a[t,0]*in[t] + ... + a[t,win_len-1]*in[t-(win_len-1)]
-        stacked = torch.stack([pad_shift(h, i) for
-                               i in range(self.attn_len)], dim=-1)
-        context = torch.sum(attn.unsqueeze(2) * stacked, dim=-1)
+        context = convolve(h, attn)
         # Flatten temporal dimension
-        context = context.reshape(-1, self.hidden_dim)
+        context = context.reshape(-1, self.h_dim)
         # Decode the context for each time step
         in_part = self.decoder(context).view(batch_size, seq_len, 1)
         # Compute autoregression weights

@@ -236,7 +236,8 @@ def main(args):
     train_data = train_data.split(args.split)
     # Batch data using data loaders
     train_loader = DataLoader(train_data, batch_size=args.batch_size,
-                              shuffle=True, collate_fn=seq_collate_dict)
+                              shuffle=True, collate_fn=seq_collate_dict,
+                              pin_memory=True)
    
     # Train and save best model
     best_ccc = -1
