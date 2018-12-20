@@ -247,7 +247,7 @@ def load_dataset(modalities, base_dir, subset,
         'acoustic': lambda df : df.drop(columns=['frameIndex', ' frameTime']),
         'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
         'emotient': lambda df : df.drop(columns=['Frametime']),
-        'ratings' : lambda df : df.drop(columns=['time'])
+        'ratings' : lambda df : df.drop(columns=['time']) * 2 - 1
     }
     if 'ratings' not in modalities:
         modalities = modalities + ['ratings']

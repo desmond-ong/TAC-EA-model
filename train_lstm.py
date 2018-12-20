@@ -19,7 +19,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from datasets import seq_collate_dict, load_dataset
-from lstm import MultiLSTM, MultiARLSTM
+from lstm import MultiLSTM, MultiEDLSTM, MultiARLSTM
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -99,11 +99,11 @@ def evaluate(dataset, model, criterion, args):
             args.axes[i].cla()
             args.axes[i].plot(true, 'b-')
             args.axes[i].plot(pred, 'c-')
-            args.axes[i].set_ylim(0, 1)
+            args.axes[i].set_ylim(-1, 1)
             args.axes[i].set_title("CCC = {:0.3f}".format(c))
         plt.tight_layout()
         plt.draw()
-        plt.pause(0.001)
+        plt.pause(1.0 if args.test else 0.001)
     # Average losses and print
     loss /= data_num
     corr = sum(corr) / len(corr)
