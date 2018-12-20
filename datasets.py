@@ -75,6 +75,7 @@ class MultiseqDataset(Dataset):
             
         # Load data from files
         self.data = {m: [] for m in modalities}
+        self.orig = {m: [] for m in modalities}
         self.lengths = []
         for i in range(len(self.seq_ids)):
             seq_len = float('inf')
@@ -94,6 +95,8 @@ class MultiseqDataset(Dataset):
                 # Flatten inputs
                 if len(d.shape) > 2:
                     d = d.reshape(d.shape[0], -1)
+                # Store original data before averaging
+                self.orig[m].append(d)
                 # Time average so that data is at base rate
                 ratio = self.ratios[m]
                 end = ratio * (len(d)//ratio)
@@ -168,8 +171,10 @@ class MultiseqDataset(Dataset):
         if (set1.base_rate != set2.base_rate):
             raise Exception("Base rates need to match.")
         merged = copy.deepcopy(set1)
+        merged.orig.clear()
         merged.seq_ids += set2.seq_ids
         merged.rates = [merged.base_rate] * len(merged.modalities)
+        merged.ratios = [1] * len(merged.modalities)
         for m in merged.modalities:
             merged.data[m] += set2.data[m]
         return merged

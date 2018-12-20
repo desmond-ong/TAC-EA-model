@@ -67,7 +67,7 @@ def evaluate(dataset, model, criterion, args):
     data_num = 0
     loss, corr, ccc = 0.0, [], []
     model.eval()
-    for data in dataset:
+    for data, orig in zip(dataset, dataset.orig['ratings']):
         # Collate data into batch dictionary of size 1
         data_dict, mask, lengths = seq_collate_dict([data])
         # Send to device
@@ -80,17 +80,20 @@ def evaluate(dataset, model, criterion, args):
         loss += criterion(output, data_dict['ratings'])
         # Keep track of total number of time-points
         data_num += data['length']
-        # Store predictions
+        # Resize predictions to match original length
         pred = output[0,:data['length']].view(-1).cpu().numpy()
+        pred = np.repeat(pred, dataset.ratios['ratings'])[:len(orig)]
+        if len(pred) < len(orig):
+            pred = np.concatenate((pred, pred[len(pred)-len(orig):]))
         predictions.append(pred)
         # Compute correlation and CCC of predictions against ratings
-        corr.append(pearsonr(data['ratings'].reshape(-1), pred)[0])
-        ccc.append(eval_ccc(data['ratings'].reshape(-1), pred))
+        corr.append(pearsonr(orig.reshape(-1), pred)[0])
+        ccc.append(eval_ccc(orig.reshape(-1), pred))
     # Plot predictions against ratings for best fit
     if args.visualize:
         top_idx = np.argsort(ccc)[-4:][::-1]
         top_ccc = [ccc[i] for i in top_idx]
-        top_true = [dataset[i]['ratings'] for i in top_idx]
+        top_true = [dataset.orig['ratings'][i] for i in top_idx]
         top_pred = [predictions[i] for i in top_idx]
         for i, (true, pred, c) in enumerate(zip(top_true, top_pred, top_ccc)):
             args.axes[i].cla()

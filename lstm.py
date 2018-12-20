@@ -116,7 +116,7 @@ class MultiARLSTM(nn.Module):
     """
     
     def __init__(self, modalities, dims, embed_dim=128, hidden_dim=512,
-                 n_layers=1, attn_len=1, ar_order=1,
+                 n_layers=1, attn_len=3, ar_order=1,
                  device=torch.device('cuda:0')):
         super(MultiARLSTM, self).__init__()
         self.modalities = modalities
