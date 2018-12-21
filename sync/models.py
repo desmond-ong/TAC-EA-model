@@ -319,7 +319,7 @@ if __name__ == "__main__":
     from datasets import load_dataset, seq_collate_dict
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir', type=str, default="./data",
+    parser.add_argument('--dir', type=str, default="../data",
                         help='data directory')
     parser.add_argument('--subset', type=str, default="Train",
                         help='whether to load Train/Valid/Test data')

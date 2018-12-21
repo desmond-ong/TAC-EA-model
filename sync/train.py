@@ -1,4 +1,4 @@
-"""Training code for combined LSTM model."""
+"""Training code for synchronous multimodal LSTM model."""
 
 from __future__ import division
 from __future__ import print_function
@@ -19,7 +19,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from datasets import seq_collate_dict, load_dataset
-from lstm import MultiLSTM, MultiEDLSTM, MultiARLSTM
+from models import MultiLSTM, MultiEDLSTM, MultiARLSTM
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -190,7 +190,7 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
-    model = MultiARLSTM(args.modalities,
+    model = MultiEDLSTM(args.modalities,
                         dims=(dims[m] for m in args.modalities),
                         device=args.device)
     if checkpoint is not None:
@@ -304,7 +304,7 @@ if __name__ == "__main__":
                         help='evaluate without training (default: false)')
     parser.add_argument('--load', type=str, default=None,
                         help='path to trained model (either resume or test)')
-    parser.add_argument('--data_dir', type=str, default="./data",
+    parser.add_argument('--data_dir', type=str, default="../data",
                         help='path to data base directory')
     parser.add_argument('--save_dir', type=str, default="./lstm_save",
                         help='path to save models, predictions, features')

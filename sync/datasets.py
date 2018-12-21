@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import Dataset
 
 class MultiseqDataset(Dataset):
-    """Multimodal dataset for time series and sequential data."""
+    """Multimodal dataset for (synchronous) time series and sequential data."""
     
     def __init__(self, modalities, dirs, regex, preprocess, rates,
                  base_rate=None, truncate=False, item_as_dict=False):
@@ -261,7 +261,7 @@ if __name__ == "__main__":
     # Test code by loading dataset
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir', type=str, default="./data",
+    parser.add_argument('--dir', type=str, default="../data",
                         help='data directory')
     parser.add_argument('--subset', type=str, default="Train",
                         help='whether to load Train/Valid/Test data')
