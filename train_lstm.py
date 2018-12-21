@@ -32,16 +32,23 @@ def eval_ccc(y_true, y_pred):
     return ccc
 
 def train(loader, model, criterion, optimizer, epoch, args):
+    model.train()
     data_num = 0
     loss= 0.0
-    model.train()
+    log_freq = len(loader) // args.log_freq
+    # Select batches that should be supervised
+    supervised = np.zeros(len(loader), dtype=bool)
+    supervised[:int(args.sup_ratio * len(loader))].fill(True)
+    np.random.shuffle(supervised)
     for batch_num, (data_dict, mask, lengths) in enumerate(loader):
         # Send to device
         mask = mask.to(args.device)
         for m in data_dict.keys():
             data_dict[m] = data_dict[m].to(args.device)
+        # Set whether to use teacher forcing
+        target = data_dict['ratings'] if supervised[batch_num] else None
         # Run forward pass.
-        output = model(data_dict, mask, lengths, target=data_dict['ratings'])
+        output = model(data_dict, mask, lengths, target=target)
         # Compute loss and gradients
         batch_loss = criterion(output, data_dict['ratings'])
         # Accumulate total loss for epoch
@@ -54,8 +61,9 @@ def train(loader, model, criterion, optimizer, epoch, args):
         optimizer.zero_grad()
         # Keep track of total number of time-points
         data_num += sum(lengths)
-        print('Batch: {:5d}\tLoss: {:2.5f}'.\
-              format(batch_num, loss/data_num))
+        if batch_num % log_freq == 0:
+            print('Batch: {:5d}\tLoss: {:2.5f}'.\
+                  format(batch_num, loss/data_num))
     # Average losses and print
     loss /= data_num
     print('---')
@@ -63,10 +71,10 @@ def train(loader, model, criterion, optimizer, epoch, args):
     return loss
 
 def evaluate(dataset, model, criterion, args):
+    model.eval()
     predictions = []
     data_num = 0
     loss, corr, ccc = 0.0, [], []
-    model.eval()
     for data, orig in zip(dataset, dataset.orig['ratings']):
         # Collate data into batch dictionary of size 1
         data_dict, mask, lengths = seq_collate_dict([data])
@@ -276,6 +284,10 @@ if __name__ == "__main__":
                         help='number of epochs to train (default: 1000)')
     parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
                         help='learning rate (default: 1e-5)')
+    parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
+                        help='teacher-forcing ratio (default: 0.5)')
+    parser.add_argument('--log_freq', type=int, default=5, metavar='N',
+                        help='print loss N times every epoch (default: 5)')
     parser.add_argument('--eval_freq', type=int, default=1, metavar='N',
                         help='evaluate every N epochs (default: 1)')
     parser.add_argument('--save_freq', type=int, default=10, metavar='N',

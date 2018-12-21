@@ -300,14 +300,15 @@ class MultiARLSTM(nn.Module):
             predicted = in_part + ar_part
         else:
             # Otherwise use own predictions
-            p_init = torch.ones(batch_size,1,1).to(self.device) * tgt_init
+            p_init = torch.ones(batch_size, 1).to(self.device) * tgt_init
             predicted = [p_init] * self.ar_order
             for t in range(seq_len):
-                ar_hist = torch.cat(predicted[-self.ar_order:], dim=2)
-                ar_part = torch.sum(ar_weight[:,t,:] * ar_hist, dim=2)
+                ar_hist = [p.detach() for p in predicted[-self.ar_order:]]
+                ar_hist = torch.cat(ar_hist, dim=1)
+                ar_part = torch.sum(ar_weight[:,t,:] * ar_hist, dim=1)
                 p = in_part[:,t,:] + ar_part.unsqueeze(-1)
                 predicted.append(p)
-            predicted = torch.cat(predicted[self.ar_order:], dim=1)
+            predicted = torch.cat(predicted[self.ar_order:], 1).unsqueeze(-1)
         # Mask predicted entries that exceed sequence lengths
         predicted = predicted * mask.float()
         return predicted
