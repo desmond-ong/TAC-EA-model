@@ -190,7 +190,7 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
-    model = MultiEDLSTM(args.modalities,
+    model = MultiARLSTM(args.modalities,
                         dims=(dims[m] for m in args.modalities),
                         device=args.device)
     if checkpoint is not None:
