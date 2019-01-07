@@ -19,6 +19,17 @@ def t_diff_mle(score, decay):
     f = lambda t : torch.exp(-intensity_nll(t, score, decay)).numpy()
     return integrate.quad(f, 0, np.inf)
 
+def pad_shift(x, shift, padv=0.0):
+    """Shift (batch, time, dims) tensor forwards in time with padding."""
+    if shift > 0:
+        padding = torch.ones(x.size(0), shift, x.size(2)).to(x.device) * padv
+        return torch.cat((padding, x[:, :-shift, :]), dim=1)
+    elif shift < 0:
+        padding = torch.ones(x.size(0), -shift, x.size(2)).to(x.device) * padv
+        return torch.cat((x[:, -shift:, :], padding), dim=1)
+    else:
+        return x
+
 class MultiNPP(nn.Module):
     """Multimodal neural point process (NPP) model.
 
@@ -88,10 +99,22 @@ class MultiNPP(nn.Module):
         score = score * mask.float()
         return value, score
 
-    def loss(self, value, score, t_diff, target):
-        # TODO: only compute loss for timestamps where target is observed
+    def loss(self, value, score, time, target, mask):
+        # Find indices where target is observed (not NaN)
+        observed = (1 - torch.isnan(target)) * mask
+        observed = torch.nonzero(observed)[:,1]
+        # Get time differences between observations
+        time = time[:,observed,:]
+        t_diff = time - pad_shift(time, 1)
+        # Get value and score for indices that precede observed target indices
+        value = pad_shift(value, 1)[:,observed,:]
+        score = pad_shift(score, 1)[:,observed,:]
+        # Compute intensity loss
         loss = intensity_nll(t_diff, score, self.decay)
+        # Compute mean square loss between predicted values and targets
         loss += torch.sum((target - value)**2)
+        # Divide loss by number of observed points
+        loss /= len(observed)
         return loss
     
 if __name__ == "__main__":
