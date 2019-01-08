@@ -10,14 +10,23 @@ import numpy as np
 from scipy import integrate
 
 def intensity_nll(t_diff, score, decay):
+    """Computes negative log-likelihood of observing t_diff
+       given the intensity function parameterized by score and decay."""
     log_intensity = score - decay * t_diff
     intensity = torch.exp(log_intensity)
     nll = -(log_intensity - 1/decay * (torch.exp(score) - intensity))
     return nll
 
-def t_diff_mle(score, decay):
-    f = lambda t : torch.exp(-intensity_nll(t, score, decay)).numpy()
-    return integrate.quad(f, 0, np.inf)
+def t_diff_mean(score, decay, t_max=None, t_step=None):
+    """Computes expected value for t_diff given score and decay."""
+    if t_max is None:
+        t_max = 5.0 / decay
+    if t_step is None:
+        t_step = 0.5 / decay
+    integrand = torch.cat([t * torch.exp(-intensity_nll(t, score, decay))
+                           for t in range(0, t_max, t_step)], dim=2)
+    t_diff = np.trapz(integrand.detach().numpy(), dx=t_step, axis=2)
+    return torch.tensor(t_diff).unsqueeze(-1)
 
 def pad_shift(x, shift, padv=0.0):
     """Shift (batch, time, dims) tensor forwards in time with padding."""
@@ -60,12 +69,12 @@ class MultiNPP(nn.Module):
         # LSTM computes hidden states from the summed embeddings
         self.lstm = nn.LSTM(self.n_mods * embed_dim, h_dim,
                             n_layers, batch_first=True)
+        # Network from LSTM hidden states to conditional intensity score
+        self.time_out = nn.Linear(h_dim, 1)
         # Regression network from LSTM hidden states to predicted value
         self.val_out = nn.Sequential(nn.Linear(h_dim, embed_dim),
                                      nn.ReLU(),
                                      nn.Linear(embed_dim, 1))
-        # Network from LSTM hidden states to conditional intensity score
-        self.time_out = nn.Linear(h_dim, 1)
         # Decay constant for intensity over time
         self.decay = nn.Parameter(torch.tensor(decay))
         # Store module in specified device (CUDA/CPU)
@@ -73,7 +82,7 @@ class MultiNPP(nn.Module):
                        torch.device('cpu'))
         self.to(self.device)
 
-    def forward(self, inputs, mask, lengths, sample=False):
+    def forward(self, inputs, mask, lengths, estimate=False):
         # Get batch dim
         batch_size, seq_len = len(lengths), max(lengths)
         # Convert NaNs to zeros so they don't affect embedding value
@@ -91,30 +100,55 @@ class MultiNPP(nn.Module):
         # Undo the packing and flatten temporal dimension
         h, _ = pad_packed_sequence(h, batch_first=True)
         h = h.reshape(-1, self.h_dim)
-        # Decode the hidden state to event values and time intensity scores
-        value = self.val_out(h).view(batch_size, seq_len, 1)
+        # Decode the hidden state to time intensity scores annd event values
         score = self.time_out(h).view(batch_size, seq_len, 1)
+        value = self.val_out(h).view(batch_size, seq_len, 1)
         # Mask entries that exceed sequence lengths
-        value = value * mask.float()
         score = score * mask.float()
-        return value, score
-
-    def loss(self, value, score, time, target, mask):
+        value = value * mask.float()
+        if not estimate:
+            # Return scores and predicted values if not estimating time
+            return score, value
+        else:
+            # Otherwise predict expected value of timestamps using score
+            return self.estimate(inputs['time'], value, score, mask)
+            
+    def estimate(self, time, score, value, mask):
+        # Compute expected time differences
+        t_diff = t_diff_mean(score, self.decay)
+        # Sum to get next event times
+        t_hat = time + t_diff
+        # Iterate backwards and keep only prediced timestamps that are
+        # smaller than the smallest timestamp seen so far
+        t_min = t_hat[:,-1,:]
+        keep = [mask[:,-1,:]]
+        for i in reversed(range(1, t_hat.shape[1])):
+            k = mask[:,i,:] * (t_hat[:,i,:] < t_min)
+            t_min = torch.min(t_min, t_hat[:,i,:])
+            keep.append(k)
+        keep = torch.cat(keep, dim=1)
+        # Filter out late event times and predicted values
+        t_filt, val_filt = [], []
+        for seq_id in range(keep.shape(0)):
+            t_seq, val_seq = t_hat[seq_id,:,:], value[seq_id,:,:]
+            t_filt.append(t_seq[keep[seq_id,:,:]])
+            val_filt.append(val_seq[keep[seq_id,:,:]])
+        return t_filt, val_filt
+            
+    def loss(self, time, target, score, value, mask):
         # Find indices where target is observed (not NaN)
         observed = (1 - torch.isnan(target)) * mask
-        observed = torch.nonzero(observed)[:,1]
-        # Get time differences between observations
-        time = time[:,observed,:]
+        # Compute time differences between observed targets and last h update
         t_diff = time - pad_shift(time, 1)
-        # Get value and score for indices that precede observed target indices
-        value = pad_shift(value, 1)[:,observed,:]
-        score = pad_shift(score, 1)[:,observed,:]
+        t_diff = t_diff[observed]
+        # Get intensity score for indices that precede observed target indices
+        score = pad_shift(score, 1)[observed]
         # Compute intensity loss
         loss = intensity_nll(t_diff, score, self.decay)
         # Compute mean square loss between predicted values and targets
-        loss += torch.sum((target - value)**2)
+        loss += torch.sum((target[observed] - value[observed])**2)
         # Divide loss by number of observed points
-        loss /= len(observed)
+        loss /= observed.sum()
         return loss
     
 if __name__ == "__main__":
