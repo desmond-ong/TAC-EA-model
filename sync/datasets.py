@@ -242,7 +242,7 @@ def load_dataset(modalities, base_dir, subset,
         'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
         #'ratings' : "target_(\d+)_(\d+)_.*\.csv"
-        'ratings' : "results_(\d+)_(\d+)_.*\.csv"
+        'ratings' : "results_(\d+)_(\d+)\.csv"
     }
     rates = {'acoustic': 2, 'linguistic': 0.2, 'emotient': 30, 'ratings': 2}
     preprocess = {
