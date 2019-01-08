@@ -20,11 +20,11 @@ def intensity_nll(t_diff, score, decay):
 def t_diff_mean(score, decay, t_max=None, t_step=None):
     """Computes expected value for t_diff given score and decay."""
     if t_max is None:
-        t_max = 5.0 / decay
+        t_max = 5.5 / decay.item()
     if t_step is None:
-        t_step = 0.5 / decay
+        t_step = 0.5 / decay.item()
     integrand = torch.cat([t * torch.exp(-intensity_nll(t, score, decay))
-                           for t in range(0, t_max, t_step)], dim=2)
+                           for t in torch.arange(0, t_max, t_step)], dim=2)
     t_diff = np.trapz(integrand.detach().numpy(), dx=t_step, axis=2)
     return torch.tensor(t_diff).unsqueeze(-1)
 
@@ -129,10 +129,10 @@ class MultiNPP(nn.Module):
             k = mask[:,i,:] * (t_hat[:,i,:] < t_min)
             t_min = torch.min(t_min, t_hat[:,i,:])
             keep.append(k)
-        keep = torch.cat(keep, dim=1)
+        keep = torch.cat(keep, dim=1).unsqueeze(-1)
         # Filter out late event times and predicted values
         t_filt, val_filt = [], []
-        for seq_id in range(keep.shape(0)):
+        for seq_id in range(keep.shape[0]):
             t_seq, val_seq = t_hat[seq_id,:,:], value[seq_id,:,:]
             t_filt.append(t_seq[keep[seq_id,:,:]])
             val_filt.append(val_seq[keep[seq_id,:,:]])
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     model.eval()
     print("Passing a sample through the model...")
     data, mask, lengths = seq_collate_dict([dataset[0]])
-    out, score = model(data, mask, lengths)
+    times, preds = model(data, mask, lengths, estimate=True)
     print("Predicted valences:")
-    for o in out.view(-1):
-        print("{:+0.3f}".format(o.item()))
+    for t, p in zip(list(times[0]), list(preds[0])):
+        print("{:0.2f}, {:+0.3f}".format(t, p))
