@@ -66,8 +66,8 @@ class MultiNPP(nn.Module):
                                           nn.Linear(self.dims[m], embed_dim),
                                           nn.ReLU())
             self.add_module('embed_{}'.format(m), self.embed[m])
-        # LSTM computes hidden states from the summed embeddings
-        self.lstm = nn.LSTM(self.n_mods * embed_dim, h_dim,
+        # LSTM computes hidden states from embeddings and inter-event times
+        self.lstm = nn.LSTM(1 + self.n_mods * embed_dim, h_dim,
                             n_layers, batch_first=True)
         # Network from LSTM hidden states to conditional intensity score
         self.time_out = nn.Linear(h_dim, 1)
@@ -91,8 +91,11 @@ class MultiNPP(nn.Module):
         # Convert raw features into equal-dimensional embeddings
         embed = torch.cat([self.embed[m](inputs[m].view(-1, self.dims[m]))
                            for m in self.modalities], dim=1)
+        # Compute inter-event times, and concatenate to embeddings
+        t_diff = inputs['time'] - pad_shift(inputs['time'], 1)
+        embed = torch.cat([t_diff.view(-1, 1), embed], dim=1)
         # Unflatten temporal dimension
-        embed = embed.reshape(batch_size, seq_len, self.n_mods*self.embed_dim)
+        embed = embed.reshape(batch_size, seq_len, -1)
         # Pack the input to mask padded entries
         embed = pack_padded_sequence(embed, lengths, batch_first=True)
         # Forward propagate LSTM
