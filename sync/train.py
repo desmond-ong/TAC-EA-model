@@ -130,7 +130,7 @@ def save_features(dataset, model, path, args):
         for m in data_dict.keys():
             data_dict[m] = data_dict[m].to(args.device)
         # Run forward pass.
-        features = model(data_dict, mask, lengths, output_features=True)
+        features = model(data_dict, mask, lengths, output_feats=True)
         features = features.squeeze(0).cpu().numpy()
         # Save features to NPY files
         fname = "ID{}_vid{}.npy".format(*seq_id)
@@ -190,9 +190,9 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
-    model = MultiARLSTM(args.modalities,
-                        dims=(dims[m] for m in args.modalities),
-                        device=args.device)
+    model = MultiLSTM(args.modalities,
+                      dims=(dims[m] for m in args.modalities),
+                      device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 

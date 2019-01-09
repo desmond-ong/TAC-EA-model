@@ -234,20 +234,20 @@ def load_dataset(modalities, base_dir, subset,
         'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
         'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
         'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
-        'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
+        'ratings' : os.path.join(base_dir, 'ratings', subset, 'observer_avg')
     }
     regex = {
         'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
         'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
-        'ratings' : "target_(\d+)_(\d+)_.*\.csv"
+        'ratings' : "results_(\d+)_(\d+)\.csv"
     }
     rates = {'acoustic': 2, 'linguistic': 0.2, 'emotient': 30, 'ratings': 2}
     preprocess = {
         'acoustic': lambda df : df.drop(columns=['frameIndex', ' frameTime']),
         'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
         'emotient': lambda df : df.drop(columns=['Frametime']),
-        'ratings' : lambda df : df.drop(columns=['time']) * 2 - 1
+        'ratings' : lambda df : df.drop(columns=['time']) / 50 - 1
     }
     if 'ratings' not in modalities:
         modalities = modalities + ['ratings']

@@ -35,7 +35,7 @@ class MultiLSTM(nn.Module):
     """
     
     def __init__(self, modalities, dims, embed_dim=128, h_dim=512,
-                 n_layers=1, attn_len=1, device=torch.device('cuda:0')):
+                 n_layers=1, attn_len=10, device=torch.device('cuda:0')):
         super(MultiLSTM, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
@@ -69,7 +69,7 @@ class MultiLSTM(nn.Module):
                        torch.device('cpu'))
         self.to(self.device)
 
-    def forward(self, inputs, mask, lengths, output_features=False):
+    def forward(self, inputs, mask, lengths, target=None, output_feats=False):
         # Get batch dim
         batch_size, seq_len = len(lengths), max(lengths)
         # Convert raw features into equal-dimensional embeddings
@@ -95,7 +95,7 @@ class MultiLSTM(nn.Module):
         # Flatten temporal dimension
         context = context.reshape(-1, self.h_dim)
         # Return features before final FC layer if flag is set
-        if output_features:
+        if output_feats:
             features = self.decoder[0](context)
             features = features.view(batch_size, seq_len, -1) * mask.float()
             return features
