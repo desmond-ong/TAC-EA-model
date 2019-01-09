@@ -202,7 +202,7 @@ def pad_and_merge(sequences, max_len=None):
 def seq_collate(data):
     """Collates multimodal variable length sequences into padded batch."""
     padded = []
-    n_modalities = len(data[0])
+    n_modalities = len(data) #n_modalities = len(data[0])
     lengths = np.zeros(n_modalities, dtype=int)
     data.sort(key=lambda x: len(x[0]), reverse=True)
     data = zip(*data)
