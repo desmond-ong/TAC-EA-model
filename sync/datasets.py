@@ -20,7 +20,7 @@ class MultiseqDataset(Dataset):
         regex -- regex patterns for the filenames of each modality
         preprocess -- data pre-processing functions for pandas dataframes
         rates -- sampling rates of each modality
-        base_rate -- base_rate to subsample to
+        base_rate -- base_rate to subsample/ovesample to
         truncate -- if true, truncate to modality with minimum length
         item_as_dict -- whether to return data as dictionary
         """
@@ -70,7 +70,7 @@ class MultiseqDataset(Dataset):
                 raise Exception("Sequence IDs do not match.")
 
         # Compute ratio to base rate
-        self.ratios = {m: int(r/self.base_rate) for m, r in
+        self.ratios = {m: r/self.base_rate for m, r in
                        zip(self.modalities, self.rates)}
             
         # Load data from files
@@ -95,17 +95,24 @@ class MultiseqDataset(Dataset):
                 # Flatten inputs
                 if len(d.shape) > 2:
                     d = d.reshape(d.shape[0], -1)
-                # Store original data before averaging
+                # Store original data before resampling
                 self.orig[m].append(d)
-                # Time average so that data is at base rate
+                # Subsample/oversample datat base rate
                 ratio = self.ratios[m]
-                end = ratio * (len(d)//ratio)
-                avg = np.mean(d[:end].reshape(-1, ratio, d.shape[1]), axis=1)
-                if end < len(d):
-                    remain = d[end:].mean(axis=0)[np.newaxis,:]
-                    d = np.concatenate([avg, remain])
+                if ratio > 1:
+                    # Time average so that data is at base rate
+                    ratio = int(ratio)
+                    end = ratio * (len(d)//ratio)
+                    avg = np.mean(d[:end].reshape(-1, ratio, d.shape[1]), 1)
+                    if end < len(d):
+                        remain = d[end:].mean(axis=0)[np.newaxis,:]
+                        d = np.concatenate([avg, remain])
+                    else:
+                        d = avg
                 else:
-                    d = avg
+                    # Repeat so that data is at base rate
+                    ratio = int(1. / ratio)
+                    d = np.repeat(d, ratio, axis=0)
                 data.append(d)
                 if len(d) < seq_len:
                     seq_len = len(d)
@@ -228,7 +235,7 @@ def seq_collate_dict(data):
     return batch, mask, lengths
 
 def load_dataset(modalities, base_dir, subset,
-                 base_rate=None, truncate=False, item_as_dict=False):
+                 base_rate=2.0, truncate=False, item_as_dict=False):
     """Helper function specifically for loading TAC-EA datasets."""
     dirs = {
         'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),

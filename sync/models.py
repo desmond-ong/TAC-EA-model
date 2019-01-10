@@ -35,7 +35,7 @@ class MultiLSTM(nn.Module):
     """
     
     def __init__(self, modalities, dims, embed_dim=128, h_dim=512,
-                 n_layers=1, attn_len=10, device=torch.device('cuda:0')):
+                 n_layers=1, attn_len=5, device=torch.device('cuda:0')):
         super(MultiLSTM, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)

@@ -70,7 +70,7 @@ def train(loader, model, criterion, optimizer, epoch, args):
     print('Epoch: {}\tLoss: {:2.5f}'.format(epoch, loss))
     return loss
 
-def evaluate(dataset, model, criterion, args):
+def evaluate(dataset, model, criterion, args, fig_path=None):
     model.eval()
     predictions = []
     data_num = 0
@@ -90,7 +90,7 @@ def evaluate(dataset, model, criterion, args):
         data_num += data['length']
         # Resize predictions to match original length
         pred = output[0,:data['length']].view(-1).cpu().numpy()
-        pred = np.repeat(pred, dataset.ratios['ratings'])[:len(orig)]
+        pred = np.repeat(pred, int(dataset.ratios['ratings']))[:len(orig)]
         if len(pred) < len(orig):
             pred = np.concatenate((pred, pred[len(pred)-len(orig):]))
         predictions.append(pred)
@@ -111,6 +111,8 @@ def evaluate(dataset, model, criterion, args):
             args.axes[i].set_title("CCC = {:0.3f}".format(c))
         plt.tight_layout()
         plt.draw()
+        if fig_path is not None:
+            plt.savefig(fig_path)
         plt.pause(1.0 if args.test else 0.001)
     # Average losses and print
     loss /= data_num
@@ -190,9 +192,9 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
-    model = MultiLSTM(args.modalities,
-                      dims=(dims[m] for m in args.modalities),
-                      device=args.device)
+    model = MultiEDLSTM(args.modalities,
+                        dims=(dims[m] for m in args.modalities),
+                        device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
@@ -219,9 +221,11 @@ def main(args):
             os.makedirs(pred_test_dir)
         # Evaluate on both training and test set
         with torch.no_grad():
-            pred, _, _, ccc1 = evaluate(train_data, model, criterion, args)
+            pred, _, _, ccc1 = evaluate(train_data, model, criterion, args,
+                os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
-            pred, _, _, ccc2 = evaluate(test_data, model, criterion, args)
+            pred, _, _, ccc2 = evaluate(test_data, model, criterion, args,
+                os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
         return ccc1, ccc2
 
