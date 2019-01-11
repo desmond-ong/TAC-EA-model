@@ -97,23 +97,9 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
         # Compute correlation and CCC of predictions against ratings
         corr.append(pearsonr(orig.reshape(-1), pred)[0])
         ccc.append(eval_ccc(orig.reshape(-1), pred))
-    # Plot predictions against ratings for best fit
+    # Plot predictions against ratings
     if args.visualize:
-        top_idx = np.argsort(ccc)[-4:][::-1]
-        top_ccc = [ccc[i] for i in top_idx]
-        top_true = [dataset.orig['ratings'][i] for i in top_idx]
-        top_pred = [predictions[i] for i in top_idx]
-        for i, (true, pred, c) in enumerate(zip(top_true, top_pred, top_ccc)):
-            args.axes[i].cla()
-            args.axes[i].plot(true, 'b-')
-            args.axes[i].plot(pred, 'c-')
-            args.axes[i].set_ylim(-1, 1)
-            args.axes[i].set_title("CCC = {:0.3f}".format(c))
-        plt.tight_layout()
-        plt.draw()
-        if fig_path is not None:
-            plt.savefig(fig_path)
-        plt.pause(1.0 if args.test else 0.001)
+        plot_predictions(dataset, predictions, ccc, args, fig_path)
     # Average losses and print
     loss /= data_num
     corr = sum(corr) / len(corr)
@@ -121,6 +107,24 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
     print('Evaluation\tLoss: {:2.5f}\tCorr: {:0.3f}\tCCC: {:0.3f}'.\
           format(loss, corr, ccc))
     return predictions, loss, corr, ccc
+
+def plot_predictions(dataset, predictions, metric, args, fig_path=None):
+    """Plots predictions against ratings for top 4 best fits."""
+    top_idx = np.argsort(metric)[-4:][::-1]
+    top_metric = [metric[i] for i in top_idx]
+    top_true = [dataset.orig['ratings'][i] for i in top_idx]
+    top_pred = [predictions[i] for i in top_idx]
+    for i, (true, pred, m) in enumerate(zip(top_true, top_pred, top_metric)):
+        args.axes[i].cla()
+        args.axes[i].plot(true, 'b-')
+        args.axes[i].plot(pred, 'c-')
+        args.axes[i].set_ylim(-1, 1)
+        args.axes[i].set_title("Fit = {:0.3f}".format(m))
+    plt.tight_layout()
+    plt.draw()
+    if fig_path is not None:
+        plt.savefig(fig_path)
+    plt.pause(1.0 if args.test else 0.001)
 
 def save_features(dataset, model, path, args):
     model.eval()
