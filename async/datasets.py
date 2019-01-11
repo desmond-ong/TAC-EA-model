@@ -12,7 +12,7 @@ class MultiseqDataset(Dataset):
     """Multimodal dataset for asynchronous sequential data."""
     
     def __init__(self, modalities, dirs, regex, preprocess, time_cols,
-                 time_tol=0, item_as_dict=False):
+                 time_tol=0, save_orig=False, item_as_dict=False):
         """Loads valence ratings and features for each modality.
         Missing values are stored as NaNs.
 
@@ -39,6 +39,9 @@ class MultiseqDataset(Dataset):
             preprocess = [preprocess] * len(self.modalities)
         preprocess = {m: p for m, p in zip(modalities, preprocess)}
         time_cols = {m: c for m, c in zip(modalities, time_cols)}
+        if type(save_orig) is not list:
+            save_orig = [save_orig] * len(self.modalities)
+        save_orig = {m: s for m, s in zip(modalities, save_orig)}
         
         # Load filenames into lists and extract regex-captured sequence IDs
         paths = dict()
@@ -66,8 +69,8 @@ class MultiseqDataset(Dataset):
                 raise Exception("Sequence IDs do not match.")
             
         # Load data from files
-        self.data = []
-        self.lengths = []
+        self.orig = {m: [] for m in modalities}
+        self.data, self.lengths = [], []
         self.cols = {}
         for i in range(len(self.seq_ids)):
             df = pd.DataFrame(columns=['time'])
@@ -96,6 +99,9 @@ class MultiseqDataset(Dataset):
                     # Remove 'time' from column names, replace time data
                     self.cols[m].remove('time')
                     d['time'] = t
+                # Store original data before dropping any rows
+                if save_orig[m]:
+                    self.orig[m].append(d)
                 # Keep only specified rows
                 if keep_rows is not None:
                     d = d.iloc[keep_rows,:]
@@ -144,11 +150,13 @@ class MultiseqDataset(Dataset):
             
     def split_(self, n):
         """Splits each sequence into n chunks (in place)."""
+        if n <= 1:
+            return
         self.data = list(itertools.chain.from_iterable(
             [np.array_split(d, n) for d in self.data]))
         self.seq_ids = list(itertools.chain.from_iterable(
             [[i] * n for i in self.seq_ids]))
-        self.lengths = [len(d) for d in self.data[self.modalities[0]]]
+        self.lengths = [len(d) for d in self.data]
 
     def split(self, n):
         """Splits each sequence into n chunks (returns new dataset)."""
@@ -164,6 +172,7 @@ class MultiseqDataset(Dataset):
         merged = copy.deepcopy(set1)
         merged.seq_ids += set2.seq_ids
         merged.data += copy.deepcopy(set2.data)
+        merged.orig = {m: [] for m in merged.modalities}
         return merged
         
 def len_to_mask(lengths):
@@ -233,7 +242,7 @@ def load_dataset(modalities, base_dir, subset,
         'emotient': lambda df : (df.loc[:,'AU1':'AU43'],
                                  ((df['time'] % 0.5) < 0.03).nonzero()[0]),
         # Only keep timestapms where ratings change
-        'ratings' : lambda df : (df*2-1,
+        'ratings' : lambda df : (df.drop(columns=['time'])*2-1,
                                  df[' rating'].diff().nonzero()[0])
     }
     time_cols = {
@@ -242,13 +251,19 @@ def load_dataset(modalities, base_dir, subset,
         'emotient': 'Frametime',
         'ratings' : 'time'
     }
+    save_orig = {
+        'acoustic': False,
+        'linguistic': False,
+        'emotient': False,
+        'ratings' : True
+    }
     if 'ratings' not in modalities:
         modalities = modalities + ['ratings']
     return MultiseqDataset(modalities, [dirs[m] for m in modalities],
                            [regex[m] for m in modalities],
                            [preprocess[m] for m in modalities],
-                           [time_cols[m] for m in modalities],
-                           time_tol, item_as_dict)
+                           [time_cols[m] for m in modalities], time_tol,
+                           [save_orig[m] for m in modalities], item_as_dict)
 
 if __name__ == "__main__":
     # Test code by loading dataset

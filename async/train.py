@@ -19,7 +19,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from datasets import seq_collate_dict, load_dataset
-from models import MultiLSTM, MultiEDLSTM, MultiARLSTM
+from models import MultiNPP
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -31,36 +31,30 @@ def eval_ccc(y_true, y_pred):
     ccc = 2*covar / (true_var + pred_var +  (pred_mean-true_mean) ** 2)
     return ccc
 
-def train(loader, model, criterion, optimizer, epoch, args):
+def train(loader, model, optimizer, epoch, args):
     model.train()
     data_num = 0
     loss= 0.0
     log_freq = len(loader) // args.log_freq
-    # Select batches that should be supervised
-    supervised = np.zeros(len(loader), dtype=bool)
-    supervised[:int(args.sup_ratio * len(loader))].fill(True)
-    np.random.shuffle(supervised)
     for batch_num, (data_dict, mask, lengths) in enumerate(loader):
         # Send to device
         mask = mask.to(args.device)
         for m in data_dict.keys():
             data_dict[m] = data_dict[m].to(args.device)
-        # Set whether to use teacher forcing
-        target = data_dict['ratings'] if supervised[batch_num] else None
         # Run forward pass.
-        output = model(data_dict, mask, lengths, target=target)
+        score, value = model(data_dict, mask, lengths)
         # Compute loss and gradients
-        batch_loss = criterion(output, data_dict['ratings'])
+        time, target = data_dict['time'], data_dict['ratings']
+        batch_loss, obs_num = model.loss(time, target, score, value, mask)
         # Accumulate total loss for epoch
-        loss += batch_loss
-        # Average over number of non-padding datapoints before stepping
-        batch_loss /= sum(lengths)
+        loss += batch_loss * obs_num
+        # Calculated gradients
         batch_loss.backward()
         # Step, then zero gradients
         optimizer.step()
         optimizer.zero_grad()
-        # Keep track of total number of time-points
-        data_num += sum(lengths)
+        # Keep track of total number of observed targets
+        data_num += obs_num
         if batch_num % log_freq == 0:
             print('Batch: {:5d}\tLoss: {:2.5f}'.\
                   format(batch_num, loss/data_num))
@@ -70,7 +64,7 @@ def train(loader, model, criterion, optimizer, epoch, args):
     print('Epoch: {}\tLoss: {:2.5f}'.format(epoch, loss))
     return loss
 
-def evaluate(dataset, model, criterion, args, fig_path=None):
+def evaluate(dataset, model, args, fig_path=None):
     model.eval()
     predictions = []
     data_num = 0
@@ -82,21 +76,28 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
         mask = mask.to(args.device)
         for m in data_dict.keys():
             data_dict[m] = data_dict[m].to(args.device)
-        # Run forward pass
-        output = model(data_dict, mask, lengths)
-        # Compute loss
-        loss += criterion(output, data_dict['ratings'])
-        # Keep track of total number of time-points
-        data_num += data['length']
-        # Resize predictions to match original length
-        pred = output[0,:data['length']].view(-1).cpu().numpy()
-        pred = np.repeat(pred, int(dataset.ratios['ratings']))[:len(orig)]
-        if len(pred) < len(orig):
-            pred = np.concatenate((pred, pred[len(pred)-len(orig):]))
+        # Run forward pass.
+        score, value = model(data_dict, mask, lengths)
+        # Compute loss and predictions
+        time, target = data_dict['time'], data_dict['ratings']
+        batch_loss, obs_num = model.loss(time, target, score, value, mask)
+        t_pred, v_pred = model.estimate(time, score, value, mask)
+        # Accumulate total loss for epoch
+        loss += batch_loss * obs_num
+        # Keep track of total number of observed targets
+        data_num += obs_num
+        # Resample predictions to match original length and sampling rate
+        t_pred, v_pred = t_pred[0].cpu().numpy(), v_pred[0].cpu().numpy()
+        t_orig, v_orig = orig['time'].values, orig[' rating'].values
+        pred = pd.Series(v_pred, index=t_pred).sort_index()
+        pred = pred[~pred.index.duplicated(keep='first')]
+        pred = pred.reindex(t_orig, method='ffill')
+        pred.iloc[0] = 0.0
+        pred = pred.values
         predictions.append(pred)
         # Compute correlation and CCC of predictions against ratings
-        corr.append(pearsonr(orig.reshape(-1), pred)[0])
-        ccc.append(eval_ccc(orig.reshape(-1), pred))
+        corr.append(pearsonr(v_orig, pred)[0])
+        ccc.append(eval_ccc(v_orig, pred))
     # Plot predictions against ratings
     if args.visualize:
         plot_predictions(dataset, predictions, ccc, args, fig_path)
@@ -118,6 +119,7 @@ def plot_predictions(dataset, predictions, metric, args, fig_path=None):
         args.axes[i].cla()
         args.axes[i].plot(true, 'b-')
         args.axes[i].plot(pred, 'c-')
+        args.axes[i].set_xlim(0, len(true))
         args.axes[i].set_ylim(-1, 1)
         args.axes[i].set_title("Fit = {:0.3f}".format(m))
     plt.tight_layout()
@@ -125,22 +127,6 @@ def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     if fig_path is not None:
         plt.savefig(fig_path)
     plt.pause(1.0 if args.test else 0.001)
-
-def save_features(dataset, model, path, args):
-    model.eval()
-    for data, seq_id in zip(dataset, dataset.seq_ids):
-        # Collate data into batch dictionary of size 1
-        data_dict, mask, lengths = seq_collate_dict([data])
-        # Send to device
-        mask = mask.to(args.device)
-        for m in data_dict.keys():
-            data_dict[m] = data_dict[m].to(args.device)
-        # Run forward pass.
-        features = model(data_dict, mask, lengths, output_feats=True)
-        features = features.squeeze(0).cpu().numpy()
-        # Save features to NPY files
-        fname = "ID{}_vid{}.npy".format(*seq_id)
-        np.save(os.path.join(path, fname), features)
 
 def save_predictions(dataset, predictions, path):
     for p, seq_id in zip(predictions, dataset.seq_ids):
@@ -158,10 +144,8 @@ def load_checkpoint(path, device):
 
 def load_data(modalities, data_dir):
     print("Loading data...")
-    train_data = load_dataset(modalities, data_dir, 'Train',
-                              truncate=True, item_as_dict=True)
-    test_data = load_dataset(modalities, data_dir, 'Valid',
-                             truncate=True, item_as_dict=True)
+    train_data = load_dataset(modalities, data_dir, 'Train', item_as_dict=True)
+    test_data = load_dataset(modalities, data_dir, 'Valid', item_as_dict=True)
     print("Done.")
     return train_data, test_data
 
@@ -175,11 +159,11 @@ def main(args):
     args.device = (torch.device(args.device) if torch.cuda.is_available()
                    else torch.device('cpu'))
 
-    # Load model if specified, or test/feature flags are set
+    # Load model if specified, or if test flag is set
     checkpoint = None
     if args.load is not None:
         checkpoint = load_checkpoint(args.load, args.device)
-    elif args.test or args.features:
+    elif args.test:
         # Load best model in output directory if unspecified
         model_path = os.path.join(args.save_dir, "best.pth")
         checkpoint = load_checkpoint(model_path, args.device)
@@ -188,25 +172,24 @@ def main(args):
         # Use loaded modalities
         args.modalities = checkpoint['modalities']
     elif args.modalities is None:
-        # Default to acoustic if unspecified
-        args.modalities = ['acoustic', 'linguistic']
+        # Default to all modalities if unspecified
+        args.modalities = ['acoustic', 'linguistic', 'emotient']
 
     # Load data for specified modalities
     train_data, test_data = load_data(args.modalities, args.data_dir)
     
     # Construct multimodal LSTM model
-    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
-    model = MultiARLSTM(args.modalities,
-                        dims=(dims[m] for m in args.modalities),
-                        device=args.device)
+    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
+    model = MultiNPP(args.modalities,
+                     dims=(dims[m] for m in args.modalities),
+                     device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
     # Setup loss and optimizer
-    criterion = nn.MSELoss(reduction='sum')
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
-    # Create path to save models/predictions/features
+    # Create path to save models/predictions
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
 
@@ -216,7 +199,7 @@ def main(args):
         
     # Evaluate model if test flag is set
     if args.test:
-        # Create paths to save features
+        # Create paths to save predictions
         pred_train_dir = os.path.join(args.save_dir, "pred_train")
         pred_test_dir = os.path.join(args.save_dir, "pred_test")
         if not os.path.exists(pred_train_dir):
@@ -225,28 +208,13 @@ def main(args):
             os.makedirs(pred_test_dir)
         # Evaluate on both training and test set
         with torch.no_grad():
-            pred, _, _, ccc1 = evaluate(train_data, model, criterion, args,
+            pred, _, _, ccc1 = evaluate(train_data, model, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
-            pred, _, _, ccc2 = evaluate(test_data, model, criterion, args,
+            pred, _, _, ccc2 = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
         return ccc1, ccc2
-
-    # Save features if flag is set
-    if args.features:
-        # Create paths to save features
-        feat_train_dir = os.path.join(args.save_dir, "feat_train")
-        feat_test_dir = os.path.join(args.save_dir, "feat_test")
-        if not os.path.exists(feat_train_dir):
-            os.makedirs(feat_train_dir)
-        if not os.path.exists(feat_test_dir):
-            os.makedirs(feat_test_dir)
-        # Save features for both training and test set
-        with torch.no_grad():
-            save_features(train_data, model, feat_train_dir, args)
-            save_features(test_data, model, feat_test_dir, args)
-        return
 
     # Split training data into chunks
     train_data = train_data.split(args.split)
@@ -259,11 +227,11 @@ def main(args):
     best_ccc = -1
     for epoch in range(1, args.epochs + 1):
         print('---')
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
                 pred, loss, corr, ccc =\
-                    evaluate(test_data, model, criterion, args)
+                    evaluate(test_data, model, args)
             if ccc > best_ccc:
                 best_ccc = ccc
                 path = os.path.join(args.save_dir, "best.pth") 
@@ -283,7 +251,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--modalities', type=str, default=None, nargs='+',
-                        help='input modalities (default: acoustic-linguistic')
+                        help='input modalities (default: all')
     parser.add_argument('--batch_size', type=int, default=25, metavar='N',
                         help='input batch size for training (default: 25)')
     parser.add_argument('--split', type=int, default=1, metavar='N',
@@ -292,8 +260,6 @@ if __name__ == "__main__":
                         help='number of epochs to train (default: 1000)')
     parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
                         help='learning rate (default: 1e-5)')
-    parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
-                        help='teacher-forcing ratio (default: 0.5)')
     parser.add_argument('--log_freq', type=int, default=5, metavar='N',
                         help='print loss N times every epoch (default: 5)')
     parser.add_argument('--eval_freq', type=int, default=1, metavar='N',
@@ -306,8 +272,6 @@ if __name__ == "__main__":
                         help='flag to visualize predictions (default: false)')
     parser.add_argument('--normalize', action='store_true', default=False,
                         help='whether to normalize inputs (default: false)')
-    parser.add_argument('--features', action='store_true', default=False,
-                        help='extract features from model (default: false)')
     parser.add_argument('--test', action='store_true', default=False,
                         help='evaluate without training (default: false)')
     parser.add_argument('--load', type=str, default=None,
@@ -315,6 +279,6 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir', type=str, default="../data",
                         help='path to data base directory')
     parser.add_argument('--save_dir', type=str, default="./lstm_save",
-                        help='path to save models, predictions, features')
+                        help='path to save models, predictions')
     args = parser.parse_args()
     main(args)

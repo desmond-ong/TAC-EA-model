@@ -23,10 +23,11 @@ def t_diff_mean(score, decay, t_max=None, t_step=None):
         t_max = 5.5 / decay.item()
     if t_step is None:
         t_step = 0.5 / decay.item()
+    t_range = torch.arange(0, t_max, t_step, device=score.device)
     integrand = torch.cat([t * torch.exp(-intensity_nll(t, score, decay))
-                           for t in torch.arange(0, t_max, t_step)], dim=2)
-    t_diff = np.trapz(integrand.detach().numpy(), dx=t_step, axis=2)
-    return torch.tensor(t_diff).unsqueeze(-1)
+                           for t in t_range], dim=2)
+    t_diff = np.trapz(integrand.detach().cpu().numpy(), dx=t_step, axis=2)
+    return torch.tensor(t_diff).unsqueeze(-1).to(score.device)
 
 def pad_shift(x, shift, padv=0.0):
     """Shift (batch, time, dims) tensor forwards in time with padding."""
@@ -125,9 +126,10 @@ class MultiNPP(nn.Module):
         # smaller than the smallest timestamp seen so far
         t_min = t_hat[:,-1,:]
         keep = [mask[:,-1,:]]
-        for i in reversed(range(1, t_hat.shape[1])):
+        for i in reversed(range(0, t_hat.shape[1]-1)):
             k = mask[:,i,:] * (t_hat[:,i,:] < t_min)
             t_min = torch.min(t_min, t_hat[:,i,:])
+            
             keep.append(k)
         keep = torch.cat(keep, dim=1).unsqueeze(-1)
         # Filter out late event times and predicted values
@@ -147,12 +149,13 @@ class MultiNPP(nn.Module):
         # Get intensity score for indices that precede observed target indices
         score = pad_shift(score, 1)[observed]
         # Compute intensity loss
-        loss = intensity_nll(t_diff, score, self.decay)
+        loss = intensity_nll(t_diff, score, self.decay).sum()
         # Compute mean square loss between predicted values and targets
         loss += torch.sum((target[observed] - value[observed])**2)
         # Divide loss by number of observed points
-        loss /= observed.sum()
-        return loss
+        n_obs = observed.sum().item()
+        loss /= n_obs
+        return loss, n_obs
     
 if __name__ == "__main__":
     # Test code by loading dataset and running through model
