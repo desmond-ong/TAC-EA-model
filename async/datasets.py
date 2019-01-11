@@ -34,7 +34,7 @@ class MultiseqDataset(Dataset):
             regex = [regex] * len(self.modalities)
         regex = {m: r for m, r in zip(modalities, regex)}
         if preprocess is None:
-            preprocess = lambda x : x
+            preprocess = lambda x : (x, None)
         if type(preprocess) is not list:
             preprocess = [preprocess] * len(self.modalities)
         preprocess = {m: p for m, p in zip(modalities, preprocess)}
@@ -86,9 +86,19 @@ class MultiseqDataset(Dataset):
                     d['time'] = (d['time'] // time_tol) * time_tol
                 # Preprocess non-time data
                 t = d['time']
-                d = preprocess[m](d.drop(columns=['time']))
+                d, keep_rows = preprocess[m](d)
+                # Get non-time column names
                 self.cols[m] = list(d.columns)
-                d = pd.concat([t, d], axis=1)
+                if 'time' not in self.cols[m]:
+                    # Add time data back in
+                    d = pd.concat([t, d], axis=1)
+                else:
+                    # Remove 'time' from column names, replace time data
+                    self.cols[m].remove('time')
+                    d['time'] = t
+                # Keep only specified rows
+                if keep_rows is not None:
+                    d = d.iloc[keep_rows,:]
                 # Merge dataframe with previous modalities
                 df = df.merge(d, how='outer', on='time')
             self.data.append(df)
@@ -215,10 +225,16 @@ def load_dataset(modalities, base_dir, subset,
         'ratings' : "target_(\d+)_(\d+)_.*\.csv"
     }
     preprocess = {
-        'acoustic': lambda df : df.drop(columns=['frameIndex']),
-        'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
-        'emotient': lambda df : df,
-        'ratings' : lambda df : df * 2 - 1
+        # Drop frame ID
+        'acoustic': lambda df : (df.drop(columns=['frameIndex']), None),
+        # Use only GloVe features
+        'linguistic': lambda df : (df.loc[:,'glove0':'glove299'], None),
+        # Only use action units, subsample from 30 Hz to 2 Hz
+        'emotient': lambda df : (df.loc[:,'AU1':'AU43'],
+                                 ((df['time'] % 0.5) < 0.03).nonzero()[0]),
+        # Only keep timestapms where ratings change
+        'ratings' : lambda df : (df*2-1,
+                                 df[' rating'].diff().nonzero()[0])
     }
     time_cols = {
         'acoustic': ' frameTime',
