@@ -113,7 +113,7 @@ def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     """Plots predictions against ratings for top 4 best fits."""
     top_idx = np.argsort(metric)[-4:][::-1]
     top_metric = [metric[i] for i in top_idx]
-    top_true = [dataset.orig['ratings'][i] for i in top_idx]
+    top_true = [dataset.orig['ratings'][i][' rating'] for i in top_idx]
     top_pred = [predictions[i] for i in top_idx]
     for i, (true, pred, m) in enumerate(zip(top_true, top_pred, top_metric)):
         args.axes[i].cla()
