@@ -12,7 +12,7 @@ class MultiseqDataset(Dataset):
     """Multimodal dataset for asynchronous sequential data."""
     
     def __init__(self, modalities, dirs, regex, preprocess, time_cols,
-                 time_tol=0, save_orig=False, item_as_dict=False):
+                 time_tol=0, target=None, save_orig=False, item_as_dict=False):
         """Loads valence ratings and features for each modality.
         Missing values are stored as NaNs.
 
@@ -22,10 +22,12 @@ class MultiseqDataset(Dataset):
         preprocess -- data pre-processing functions for pandas dataframes
         time_cols -- timestamp column names
         time_tol -- round timestamps to multiple of this number
+        target -- name of target modality
         item_as_dict -- whether to return data as dictionary
         """
         # Store arguments
         self.modalities = modalities
+        self.target = target
         self.item_as_dict = item_as_dict
 
         # Convert to modality-indexed dictionaries
@@ -114,15 +116,29 @@ class MultiseqDataset(Dataset):
         return len(self.seq_ids)
 
     def __getitem__(self, i):
+        if self.target is not None:
+            # Backfill target modality values and timestamps
+            v_target = self.data[i][self.cols[self.target]]
+            t_target = self.data[i][['time']].copy()
+            t_target[v_target.isna().any(axis=1)] = np.nan
+            v_target = v_target.fillna(method='bfill').values
+            t_target = t_target.fillna(method='bfill').values
         if self.item_as_dict:
+            # Return data as dictionary
             d = {m: self.data[i][self.cols[m]].values
                  for m in self.modalities}
             d['time'] = self.data[i][['time']].values
             d['length'] = self.lengths[i]
+            if self.target is not None:
+                d['v_target'] = v_target
+                d['t_target'] = t_target
             return d
         else:
+            # Return data as tuple
             d = [self.data[i][self.cols[m]].values for m in self.modalities]
             d = [self.data[i][['time']].values] + d
+            if self.target is not None:
+                d = d + [t_target, v_target]
             return tuple(d)
         
     def normalize_(self):
@@ -218,7 +234,7 @@ def seq_collate_dict(data):
     mask = len_to_mask(lengths)
     return batch, mask, lengths
 
-def load_dataset(modalities, base_dir, subset,
+def load_dataset(modalities, base_dir, subset, target='ratings',
                  time_tol=1.0/30, item_as_dict=False):
     """Helper function specifically for loading TAC-EA datasets."""
     dirs = {
@@ -259,11 +275,15 @@ def load_dataset(modalities, base_dir, subset,
     }
     if 'ratings' not in modalities:
         modalities = modalities + ['ratings']
-    return MultiseqDataset(modalities, [dirs[m] for m in modalities],
-                           [regex[m] for m in modalities],
-                           [preprocess[m] for m in modalities],
-                           [time_cols[m] for m in modalities], time_tol,
-                           [save_orig[m] for m in modalities], item_as_dict)
+    return MultiseqDataset(modalities=modalities,
+                           dirs=[dirs[m] for m in modalities],
+                           regex=[regex[m] for m in modalities],
+                           preprocess=[preprocess[m] for m in modalities],
+                           time_cols=[time_cols[m] for m in modalities],
+                           time_tol=time_tol,
+                           target=target,
+                           save_orig=[save_orig[m] for m in modalities],
+                           item_as_dict=item_as_dict)
 
 if __name__ == "__main__":
     # Test code by loading dataset
@@ -277,19 +297,16 @@ if __name__ == "__main__":
 
     print("Loading data...")
     modalities = ['acoustic', 'linguistic', 'emotient', 'ratings']
-    dataset = load_dataset(modalities, args.dir, args.subset)
+    dataset = load_dataset(modalities, args.dir, args.subset,
+                           item_as_dict=True)
     print("Testing batch collation...")
-    data = seq_collate([dataset[i] for i in range(min(10, len(dataset)))])
+    data, mask, lengths = seq_collate_dict([dataset[i] for i in
+                                            range(min(10, len(dataset)))])
     print("Batch shapes:")
-    for d in data[:-2]:
-         print(d.shape)
-    print("Sequence lengths: ", data[-1])
+    for m in (['time'] + modalities + ['t_target', 'v_target']):
+         print("{:15} {}".format(m, list(data[m].shape)))
+    print("Sequence lengths: ", lengths)
     print("Checking through data for mismatched sequence lengths...")
     for i, data in enumerate(dataset):
         print("Subject, Video: ", dataset.seq_ids[i])
-        time, acoustic, linguistic, emotient, ratings = data
-        print(acoustic.shape, linguistic.shape, emotient.shape, ratings.shape)
-        if not (len(acoustic) == len(ratings) and
-                len(linguistic) == len(ratings) and 
-                len(emotient) == len(ratings)):
-            print("WARNING: Mismatched sequence lengths.")
+        print(*[data[m].shape for m in (['time'] + modalities)])

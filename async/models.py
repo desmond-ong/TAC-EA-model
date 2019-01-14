@@ -39,7 +39,7 @@ def pad_shift(x, shift, padv=0.0):
         return torch.cat((x[:, -shift:, :], padding), dim=1)
     else:
         return x
-
+    
 class MultiNPP(nn.Module):
     """Multimodal neural point process (NPP) model.
 
@@ -119,7 +119,7 @@ class MultiNPP(nn.Module):
             
     def estimate(self, time, score, value, mask):
         # Compute expected time differences
-        t_diff = t_diff_mean(score, self.decay)
+        t_diff = t_diff_mean(score, torch.abs(self.decay))
         # Sum to get next event times
         t_hat = time + t_diff
         # Iterate backwards and keep only prediced timestamps that are
@@ -140,19 +140,19 @@ class MultiNPP(nn.Module):
             val_filt.append(val_seq[keep[seq_id,:,:]])
         return t_filt, val_filt
             
-    def loss(self, time, target, score, value, mask):
-        # Find indices where target is observed (not NaN)
-        observed = (1 - torch.isnan(target)) * mask
-        # Compute time differences between observed targets and last h update
-        t_diff = time - pad_shift(time, 1)
-        t_diff = t_diff[observed]
-        # Get intensity score for indices that precede observed target indices
-        score = pad_shift(score, 1)[observed]
+    def loss(self, data, score, value, mask):
+        t_target, v_target = data['t_target'], data['v_target']
+        time = data['time']
+        # Find indices before last target is observed
+        observed = (1 - torch.isnan(v_target)) * mask        
+        # Compute time differences from target observations
+        t_diff = t_target - time
         # Compute intensity loss
-        loss = intensity_nll(t_diff, score, self.decay).sum()
+        decay = torch.abs(self.decay)
+        loss = (intensity_nll(t_diff[observed], score[observed], decay)).sum()
         # Compute mean square loss between predicted values and targets
-        loss += torch.sum((target[observed] - value[observed])**2)
-        # Divide loss by number of observed points
+        loss += torch.sum((v_target[observed] - value[observed])**2)
+        # Divide loss by number of non-padding datapoints
         n_obs = observed.sum().item()
         loss /= n_obs
         return loss, n_obs

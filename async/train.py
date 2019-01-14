@@ -36,19 +36,18 @@ def train(loader, model, optimizer, epoch, args):
     data_num = 0
     loss= 0.0
     log_freq = len(loader) // args.log_freq
-    for batch_num, (data_dict, mask, lengths) in enumerate(loader):
+    for batch_num, (data, mask, lengths) in enumerate(loader):
         # Send to device
         mask = mask.to(args.device)
-        for m in data_dict.keys():
-            data_dict[m] = data_dict[m].to(args.device)
+        for m in data.keys():
+            data[m] = data[m].to(args.device)
         # Run forward pass.
-        score, value = model(data_dict, mask, lengths)
+        score, value = model(data, mask, lengths)
         # Compute loss and gradients
-        time, target = data_dict['time'], data_dict['ratings']
-        batch_loss, obs_num = model.loss(time, target, score, value, mask)
+        batch_loss, obs_num = model.loss(data, score, value, mask)
         # Accumulate total loss for epoch
         loss += batch_loss * obs_num
-        # Calculated gradients
+        # Calculate gradients for batch
         batch_loss.backward()
         # Step, then zero gradients
         optimizer.step()
@@ -71,17 +70,16 @@ def evaluate(dataset, model, args, fig_path=None):
     loss, corr, ccc = 0.0, [], []
     for data, orig in zip(dataset, dataset.orig['ratings']):
         # Collate data into batch dictionary of size 1
-        data_dict, mask, lengths = seq_collate_dict([data])
+        data, mask, lengths = seq_collate_dict([data])
         # Send to device
         mask = mask.to(args.device)
-        for m in data_dict.keys():
-            data_dict[m] = data_dict[m].to(args.device)
+        for m in data.keys():
+            data[m] = data[m].to(args.device)
         # Run forward pass.
-        score, value = model(data_dict, mask, lengths)
+        score, value = model(data, mask, lengths)
         # Compute loss and predictions
-        time, target = data_dict['time'], data_dict['ratings']
-        batch_loss, obs_num = model.loss(time, target, score, value, mask)
-        t_pred, v_pred = model.estimate(time, score, value, mask)
+        batch_loss, obs_num = model.loss(data, score, value, mask)
+        t_pred, v_pred = model.estimate(data['time'], score, value, mask)
         # Accumulate total loss for epoch
         loss += batch_loss * obs_num
         # Keep track of total number of observed targets
