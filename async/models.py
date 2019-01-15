@@ -40,8 +40,8 @@ def pad_shift(x, shift, padv=0.0):
     else:
         return x
     
-class MultiNPP(nn.Module):
-    """Multimodal neural point process (NPP) model.
+class SemiParamNPP(nn.Module):
+    """Multimodal semi-parametric neural point process (NPP) model.
 
     modalities -- list of names of each input modality
     dims -- list of dimensions for input modalities
@@ -51,8 +51,8 @@ class MultiNPP(nn.Module):
     """
     
     def __init__(self, modalities, dims, embed_dim=128, h_dim=512,
-                 n_layers=1, decay=0.1, device=torch.device('cuda:0')):
-        super(MultiNPP, self).__init__()
+                 n_layers=1, decay=0.01, device=torch.device('cuda:0')):
+        super(SemiParamNPP, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
         self.dims = dict(zip(modalities, dims))
@@ -71,7 +71,9 @@ class MultiNPP(nn.Module):
         self.lstm = nn.LSTM(1 + self.n_mods * embed_dim, h_dim,
                             n_layers, batch_first=True)
         # Network from LSTM hidden states to conditional intensity score
-        self.time_out = nn.Linear(h_dim, 1)
+        self.time_out = nn.Sequential(nn.Linear(h_dim, embed_dim),
+                                      nn.ReLU(),
+                                      nn.Linear(embed_dim, 1))
         # Regression network from LSTM hidden states to predicted value
         self.val_out = nn.Sequential(nn.Linear(h_dim, embed_dim),
                                      nn.ReLU(),
@@ -115,7 +117,7 @@ class MultiNPP(nn.Module):
             return score, value
         else:
             # Otherwise predict expected value of timestamps using score
-            return self.estimate(inputs['time'], value, score, mask)
+            return self.estimate(inputs['time'], score, value, mask)
             
     def estimate(self, time, score, value, mask):
         # Compute expected time differences
@@ -128,8 +130,7 @@ class MultiNPP(nn.Module):
         keep = [mask[:,-1,:]]
         for i in reversed(range(0, t_hat.shape[1]-1)):
             k = mask[:,i,:] * (t_hat[:,i,:] < t_min)
-            t_min = torch.min(t_min, t_hat[:,i,:])
-            
+            t_min = torch.min(t_min, t_hat[:,i,:])            
             keep.append(k)
         keep = torch.cat(keep, dim=1).unsqueeze(-1)
         # Filter out late event times and predicted values
@@ -156,6 +157,118 @@ class MultiNPP(nn.Module):
         n_obs = observed.sum().item()
         loss /= n_obs
         return loss, n_obs
+
+class NonParamNPP(nn.Module):
+    """Multimodal non-parametric neural point process (NPP) model.
+
+    modalities -- list of names of each input modality
+    dims -- list of dimensions for input modalities
+    embed_dim -- dimensions of embedding for feature-level fusion
+    h_dim -- dimensions of LSTM hidden state
+    n_layers -- number of LSTM layers
+    """
+    
+    def __init__(self, modalities, dims, embed_dim=128, h_dim=512,
+                 n_layers=1, device=torch.device('cuda:0')):
+        super(NonParamNPP, self).__init__()
+        self.modalities = modalities
+        self.n_mods = len(modalities)
+        self.dims = dict(zip(modalities, dims))
+        self.embed_dim = embed_dim
+        self.h_dim = h_dim
+        self.n_layers = n_layers
+        
+        # Create raw-to-embed FC+Dropout layer for each modality
+        self.embed = dict()
+        for m in self.modalities:
+            self.embed[m] = nn.Sequential(nn.Dropout(0.1),
+                                          nn.Linear(self.dims[m], embed_dim),
+                                          nn.ReLU())
+            self.add_module('embed_{}'.format(m), self.embed[m])
+        # LSTM computes hidden states from embeddings and inter-event times
+        self.lstm = nn.LSTM(1 + self.n_mods * embed_dim, h_dim,
+                            n_layers, batch_first=True)
+        # Regression network from LSTM hidden states to time-deltas
+        self.time_out = nn.Sequential(nn.Linear(h_dim, embed_dim),
+                                      nn.ReLU(),
+                                      nn.Linear(embed_dim, 1))
+        # Regression network from LSTM hidden states to predicted value
+        self.val_out = nn.Sequential(nn.Linear(h_dim, embed_dim),
+                                     nn.ReLU(),
+                                     nn.Linear(embed_dim, 1))
+        # Store module in specified device (CUDA/CPU)
+        self.device = (device if torch.cuda.is_available() else
+                       torch.device('cpu'))
+        self.to(self.device)
+
+    def forward(self, inputs, mask, lengths, estimate=False):
+        # Get batch dim
+        batch_size, seq_len = len(lengths), max(lengths)
+        # Convert NaNs to zeros so they don't affect embedding value
+        for m in self.modalities:
+            inputs[m][torch.isnan(inputs[m])] = 0
+        # Convert raw features into equal-dimensional embeddings
+        embed = torch.cat([self.embed[m](inputs[m].view(-1, self.dims[m]))
+                           for m in self.modalities], dim=1)
+        # Compute inter-event times, and concatenate to embeddings
+        t_diff_in = inputs['time'] - pad_shift(inputs['time'], 1)
+        embed = torch.cat([t_diff_in.view(-1, 1), embed], dim=1)
+        # Unflatten temporal dimension
+        embed = embed.reshape(batch_size, seq_len, -1)
+        # Pack the input to mask padded entries
+        embed = pack_padded_sequence(embed, lengths, batch_first=True)
+        # Forward propagate LSTM
+        h, _ = self.lstm(embed)
+        # Undo the packing and flatten temporal dimension
+        h, _ = pad_packed_sequence(h, batch_first=True)
+        h = h.reshape(-1, self.h_dim)
+        # Decode the hidden state to predicted time-deltas and values
+        t_diff = self.time_out(h).view(batch_size, seq_len, 1)
+        value = self.val_out(h).view(batch_size, seq_len, 1)
+        # Mask entries that exceed sequence lengths
+        t_diff = t_diff * mask.float()
+        value = value * mask.float()
+        if not estimate:
+            # Return all predictions to compute loss
+            return t_diff, value
+        else:
+            # Filter out out-of-order timestamps and return predict
+            return self.estimate(inputs['time'], t_diff, value, mask)
+            
+    def estimate(self, time, t_diff, value, mask):
+        # Sum to get next event times
+        t_hat = time + t_diff
+        # Iterate backwards and keep only prediced timestamps that are
+        # smaller than the smallest timestamp seen so far
+        t_min = t_hat[:,-1,:]
+        keep = [mask[:,-1,:]]
+        for i in reversed(range(0, t_hat.shape[1]-1)):
+            k = mask[:,i,:] * (t_hat[:,i,:] < t_min)
+            t_min = torch.min(t_min, t_hat[:,i,:])
+            keep.append(k)
+        keep = torch.cat(keep, dim=1).unsqueeze(-1)
+        # Filter out late event times and predicted values
+        t_filt, v_filt = [], []
+        for seq_id in range(keep.shape[0]):
+            t_seq, v_seq = t_hat[seq_id,:,:], value[seq_id,:,:]
+            t_filt.append(t_seq[keep[seq_id,:,:]])
+            v_filt.append(v_seq[keep[seq_id,:,:]])
+        return t_filt, v_filt
+            
+    def loss(self, data, t_diff, value, mask):
+        t_target, v_target = data['t_target'], data['v_target']
+        time = data['time']
+        # Find indices before last target is observed
+        observed = (1 - torch.isnan(v_target)) * mask        
+        # Compute mean square loss for time-deltas
+        loss = torch.sum(((t_target-time)[observed] - t_diff[observed])**2)
+        loss *= 0.01
+        # Compute mean square loss between predicted values and targets
+        loss += torch.sum((v_target[observed] - value[observed])**2)
+        # Divide loss by number of non-padding datapoints
+        n_obs = observed.sum().item()
+        loss /= n_obs
+        return loss, n_obs
     
 if __name__ == "__main__":
     # Test code by loading dataset and running through model
@@ -173,8 +286,8 @@ if __name__ == "__main__":
     dataset = load_dataset(['acoustic', 'emotient', 'ratings'],
                            args.dir, args.subset, item_as_dict=True)
     print("Building model...")
-    model = MultiNPP(['acoustic', 'emotient'], [988, 31],
-                     device=torch.device('cpu'))
+    model = SemiParamNPP(['acoustic', 'emotient'], [988, 31],
+                         device=torch.device('cpu'))
     model.eval()
     print("Passing a sample through the model...")
     data, mask, lengths = seq_collate_dict([dataset[0]])

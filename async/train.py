@@ -19,7 +19,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from datasets import seq_collate_dict, load_dataset
-from models import MultiNPP
+from models import SemiParamNPP, NonParamNPP
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -91,7 +91,7 @@ def evaluate(dataset, model, args, fig_path=None):
         pred = pred[~pred.index.duplicated(keep='first')]
         pred = pred.reindex(t_orig, method='ffill')
         pred.iloc[0] = 0.0
-        pred = pred.values
+        pred = pred.fillna(method='ffill').values
         predictions.append(pred)
         # Compute correlation and CCC of predictions against ratings
         corr.append(pearsonr(v_orig, pred)[0])
@@ -178,9 +178,9 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
-    model = MultiNPP(args.modalities,
-                     dims=(dims[m] for m in args.modalities),
-                     device=args.device)
+    model = NonParamNPP(args.modalities,
+                        dims=(dims[m] for m in args.modalities),
+                        device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
