@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from nltk.corpus import stopwords
 
 class MultiseqDataset(Dataset):
     """Multimodal dataset for asynchronous sequential data."""
@@ -237,9 +238,11 @@ def seq_collate_dict(data):
 def load_dataset(modalities, base_dir, subset, target='ratings',
                  time_tol=1.0/30, item_as_dict=False):
     """Helper function specifically for loading TAC-EA datasets."""
+    s_words = set(stopwords.words('english'))
     dirs = {
         'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
         'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
+#       'linguistic': os.path.join(base_dir, 'features', subset, 'word-level'),
         'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
         'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
     }
@@ -254,16 +257,22 @@ def load_dataset(modalities, base_dir, subset, target='ratings',
         'acoustic': lambda df : (df.drop(columns=['frameIndex']), None),
         # Use only GloVe features
         'linguistic': lambda df : (df.loc[:,'glove0':'glove299'], None),
+                                   # (~df['word'].str.lower()\
+                                   #  .str.strip([',','.'])\
+                                   #  .isin(s_words)).nonzero()[0]),
         # Only use action units, subsample from 30 Hz to 2 Hz
         'emotient': lambda df : (df.loc[:,'AU1':'AU43'],
                                  ((df['time'] % 0.5) < 0.03).nonzero()[0]),
-        # Only keep timestapms where ratings change
+        # Only keep timestamps where ratings stay constant for 3 frames
         'ratings' : lambda df : (df.drop(columns=['time'])*2-1,
-                                 df[' rating'].diff().nonzero()[0])
+                                 df[' rating'].groupby(
+                                     df[' rating'].diff().ne(0).cumsum()
+                                 ).transform('size').ge(3).astype(int)\
+                                 .diff().nonzero()[0])
     }
     time_cols = {
         'acoustic': ' frameTime',
-        'linguistic': 'time',
+        'linguistic': 'time-onset',
         'emotient': 'Frametime',
         'ratings' : 'time'
     }
