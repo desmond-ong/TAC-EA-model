@@ -42,9 +42,10 @@ def train(loader, model, optimizer, epoch, args):
         for m in data.keys():
             data[m] = data[m].to(args.device)
         # Run forward pass.
-        score, value = model(data, mask, lengths)
+        t_out, v_out = model(data, mask, lengths)
         # Compute loss and gradients
-        batch_loss, obs_num = model.loss(data, score, value, mask)
+        batch_loss, obs_num = model.loss(data, t_out, v_out, mask,
+                                         lambda_t=args.lambda_t)
         # Accumulate total loss for epoch
         loss += batch_loss * obs_num
         # Calculate gradients for batch
@@ -76,10 +77,11 @@ def evaluate(dataset, model, args, fig_path=None):
         for m in data.keys():
             data[m] = data[m].to(args.device)
         # Run forward pass.
-        score, value = model(data, mask, lengths)
+        t_out, v_out = model(data, mask, lengths)
         # Compute loss and predictions
-        batch_loss, obs_num = model.loss(data, score, value, mask)
-        t_pred, v_pred = model.estimate(data['time'], score, value, mask)
+        batch_loss, obs_num = model.loss(data, t_out, v_out, mask,
+                                         lambda_t=args.lambda_t)
+        t_pred, v_pred = model.estimate(data['time'], t_out, v_out, mask)
         # Accumulate total loss for epoch
         loss += batch_loss * obs_num
         # Keep track of total number of observed targets
@@ -258,6 +260,8 @@ if __name__ == "__main__":
                         help='number of epochs to train (default: 1000)')
     parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
                         help='learning rate (default: 1e-5)')
+    parser.add_argument('--lambda_t', type=float, default=0.1, metavar='L',
+                        help='weight for timestamp loss (default: 0.1)')
     parser.add_argument('--log_freq', type=int, default=5, metavar='N',
                         help='print loss N times every epoch (default: 5)')
     parser.add_argument('--eval_freq', type=int, default=1, metavar='N',

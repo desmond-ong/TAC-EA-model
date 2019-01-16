@@ -51,7 +51,7 @@ class SemiParamNPP(nn.Module):
     """
     
     def __init__(self, modalities, dims, embed_dim=128, h_dim=512,
-                 n_layers=1, decay=0.01, device=torch.device('cuda:0')):
+                 n_layers=1, decay=1.0, device=torch.device('cuda:0')):
         super(SemiParamNPP, self).__init__()
         self.modalities = modalities
         self.n_mods = len(modalities)
@@ -141,20 +141,23 @@ class SemiParamNPP(nn.Module):
             val_filt.append(val_seq[keep[seq_id,:,:]])
         return t_filt, val_filt
             
-    def loss(self, data, score, value, mask):
+    def loss(self, data, score, value, mask, lambda_t=0.1):
         t_target, v_target = data['t_target'], data['v_target']
         time = data['time']
         # Find indices before last target is observed
-        observed = (1 - torch.isnan(v_target)) * mask        
+        observed = (1 - torch.isnan(v_target)) * mask
+        n_obs = observed.sum().item()
+        if n_obs == 0:
+            return torch.tensor(0.0).to(self.device), 0
         # Compute time differences from target observations
         t_diff = t_target - time
         # Compute intensity loss
         decay = torch.abs(self.decay)
         loss = (intensity_nll(t_diff[observed], score[observed], decay)).sum()
+        loss *= lambda_t
         # Compute mean square loss between predicted values and targets
         loss += torch.sum((v_target[observed] - value[observed])**2)
         # Divide loss by number of non-padding datapoints
-        n_obs = observed.sum().item()
         loss /= n_obs
         return loss, n_obs
 
@@ -255,14 +258,17 @@ class NonParamNPP(nn.Module):
             v_filt.append(v_seq[keep[seq_id,:,:]])
         return t_filt, v_filt
             
-    def loss(self, data, t_diff, value, mask):
+    def loss(self, data, t_diff, value, mask, lambda_t=0.01):
         t_target, v_target = data['t_target'], data['v_target']
         time = data['time']
         # Find indices before last target is observed
-        observed = (1 - torch.isnan(v_target)) * mask        
+        observed = (1 - torch.isnan(v_target)) * mask
+        n_obs = observed.sum().item()
+        if n_obs == 0:
+            return torch.tensor(0.0).to(self.device), 0
         # Compute mean square loss for time-deltas
         loss = torch.sum(((t_target-time)[observed] - t_diff[observed])**2)
-        loss *= 0.01
+        loss *= lambda_t
         # Compute mean square loss between predicted values and targets
         loss += torch.sum((v_target[observed] - value[observed])**2)
         # Divide loss by number of non-padding datapoints
