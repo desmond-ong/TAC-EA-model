@@ -109,17 +109,21 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
     return predictions, loss, corr, ccc
 
 def plot_predictions(dataset, predictions, metric, args, fig_path=None):
-    """Plots predictions against ratings for top 4 best fits."""
-    top_idx = np.argsort(metric)[-4:][::-1]
-    top_metric = [metric[i] for i in top_idx]
-    top_true = [dataset.orig['ratings'][i] for i in top_idx]
-    top_pred = [predictions[i] for i in top_idx]
-    for i, (true, pred, m) in enumerate(zip(top_true, top_pred, top_metric)):
-        args.axes[i].cla()
-        args.axes[i].plot(true, 'b-')
-        args.axes[i].plot(pred, 'c-')
-        args.axes[i].set_ylim(-1, 1)
-        args.axes[i].set_title("Fit = {:0.3f}".format(m))
+    """Plots predictions against ratings for representative fits."""
+    # Select top 4 and bottom 4
+    sel_idx = np.concatenate((np.argsort(metric)[-4:][::-1],
+                              np.argsort(metric)[:4]))
+    sel_metric = [metric[i] for i in sel_idx]
+    sel_true = [dataset.orig['ratings'][i][' rating'] for i in sel_idx]
+    sel_pred = [predictions[i] for i in sel_idx]
+    for i, (true, pred, m) in enumerate(zip(sel_true, sel_pred, sel_metric)):
+        j, i = (i // 4), (i % 4)
+        args.axes[i,j].cla()
+        args.axes[i,j].plot(true, 'b-')
+        args.axes[i,j].plot(pred, 'c-')
+        args.axes[i,j].set_xlim(0, len(true))
+        args.axes[i,j].set_ylim(-1, 1)
+        args.axes[i,j].set_title("Fit = {:0.3f}".format(m))
     plt.tight_layout()
     plt.draw()
     if fig_path is not None:
@@ -212,7 +216,7 @@ def main(args):
 
     # Create figure to visualize predictions
     if args.visualize:
-        args.fig, args.axes = plt.subplots(4, 1, figsize=(4,8))
+        args.fig, args.axes = plt.subplots(4, 2, figsize=(6,8))
         
     # Evaluate model if test flag is set
     if args.test:
