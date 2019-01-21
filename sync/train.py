@@ -114,7 +114,7 @@ def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     sel_idx = np.concatenate((np.argsort(metric)[-4:][::-1],
                               np.argsort(metric)[:4]))
     sel_metric = [metric[i] for i in sel_idx]
-    sel_true = [dataset.orig['ratings'][i][' rating'] for i in sel_idx]
+    sel_true = [dataset.orig['ratings'][i] for i in sel_idx]
     sel_pred = [predictions[i] for i in sel_idx]
     for i, (true, pred, m) in enumerate(zip(sel_true, sel_pred, sel_metric)):
         j, i = (i // 4), (i % 4)
@@ -193,13 +193,13 @@ def main(args):
         args.modalities = checkpoint['modalities']
     elif args.modalities is None:
         # Default to acoustic if unspecified
-        args.modalities = ['acoustic', 'linguistic']
+        args.modalities = ['acoustic', 'linguistic', 'emotient']
 
     # Load data for specified modalities
     train_data, test_data = load_data(args.modalities, args.data_dir)
     
     # Construct multimodal LSTM model
-    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 31}
+    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
     model = MultiARLSTM(args.modalities,
                         dims=(dims[m] for m in args.modalities),
                         device=args.device)
@@ -287,7 +287,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--modalities', type=str, default=None, nargs='+',
-                        help='input modalities (default: acoustic-linguistic')
+                        help='input modalities (default: all')
     parser.add_argument('--batch_size', type=int, default=25, metavar='N',
                         help='input batch size for training (default: 25)')
     parser.add_argument('--split', type=int, default=1, metavar='N',

@@ -251,9 +251,20 @@ def load_dataset(modalities, base_dir, subset,
     }
     rates = {'acoustic': 2, 'linguistic': 0.2, 'emotient': 30, 'ratings': 2}
     preprocess = {
+        # Drop timestamps and frame indices
         'acoustic': lambda df : df.drop(columns=['frameIndex', ' frameTime']),
+        # Use only GloVe vectors
         'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
-        'emotient': lambda df : df.drop(columns=['Frametime']),
+        # Fill in missing emotient data with zeros, use only action units
+        'emotient': lambda df : (df.set_index('Frametime')\
+                                 .reindex(
+                                     np.arange(0.0333667,
+                                               max(df['Frametime']),
+                                               0.0333667),
+                                     axis='index', method='nearest',
+                                     tolerance=1e-3, fill_value=0)\
+                                 .reset_index().loc[:,'AU1':'AU43']),
+        # Rescale from [0, 100] to [-1, 1]
         'ratings' : lambda df : df.drop(columns=['time']) / 50 - 1
     }
     if 'ratings' not in modalities:
