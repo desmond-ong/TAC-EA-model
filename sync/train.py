@@ -163,8 +163,10 @@ def load_checkpoint(path, device):
 def load_data(modalities, data_dir):
     print("Loading data...")
     train_data = load_dataset(modalities, data_dir, 'Train',
+                              base_rate=args.base_rate,
                               truncate=True, item_as_dict=True)
     test_data = load_dataset(modalities, data_dir, 'Valid',
+                             base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
     return train_data, test_data
@@ -200,7 +202,7 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
-    model = MultiARLSTM(args.modalities,
+    model = MultiEDLSTM(args.modalities,
                         dims=(dims[m] for m in args.modalities),
                         device=args.device)
     if checkpoint is not None:
@@ -298,6 +300,8 @@ if __name__ == "__main__":
                         help='learning rate (default: 1e-5)')
     parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
                         help='teacher-forcing ratio (default: 0.5)')
+    parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
+                        help='sampling rate to resample to (default: 2.0)')
     parser.add_argument('--log_freq', type=int, default=5, metavar='N',
                         help='print loss N times every epoch (default: 5)')
     parser.add_argument('--eval_freq', type=int, default=1, metavar='N',

@@ -235,19 +235,21 @@ def seq_collate_dict(data):
     return batch, mask, lengths
 
 def load_dataset(modalities, base_dir, subset,
-                 base_rate=2.0, truncate=False, item_as_dict=False):
+                 base_rate=None, truncate=False, item_as_dict=False):
     """Helper function specifically for loading TAC-EA datasets."""
     dirs = {
         'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
         'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
         'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
         'ratings' : os.path.join(base_dir, 'ratings', subset, 'observer_avg')
+        # 'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
     }
     regex = {
         'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
         'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
-        'ratings' : "results_(\d+)_(\d+)\.csv"
+        'ratings' : "results_(\d+)_(\d+)\.csv" #observer_avg
+        # 'ratings' : "target_(\d+)_(\d+)_normal\.csv" #target
     }
     rates = {'acoustic': 2, 'linguistic': 0.2, 'emotient': 30, 'ratings': 2}
     preprocess = {
@@ -266,6 +268,7 @@ def load_dataset(modalities, base_dir, subset,
                                  .reset_index().loc[:,'AU1':'AU43']),
         # Rescale from [0, 100] to [-1, 1]
         'ratings' : lambda df : df.drop(columns=['time']) / 50 - 1
+        # 'ratings' : lambda df : df.drop(columns=['time']) * 2 - 1 #target
     }
     if 'ratings' not in modalities:
         modalities = modalities + ['ratings']
