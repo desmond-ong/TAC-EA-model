@@ -137,6 +137,20 @@ def save_predictions(dataset, predictions, path):
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
 
+def save_params(args, model, train_ccc, test_ccc):
+    fname = 'param_hist.tsv'
+    df = pd.DataFrame([vars(args)], columns=vars(args).keys())
+    df = df[['modalities', 'batch_size', 'split', 'epochs', 'lr', 'lambda_t']]
+    df.insert(0, 'test_ccc', [test_ccc])
+    df.insert(0, 'train_ccc', [train_ccc])
+    df.insert(0, 'model', [model.__class__.__name__])
+    if type(model) is SemiParamNPP:
+        df['decay'] = [model.decay.item()]
+    else:
+        df['decay'] = [float('nan')]
+    df.set_index('model')
+    df.to_csv(fname, mode='a', header=(not os.path.exists(fname)), sep='\t')
+        
 def save_checkpoint(modalities, model, path):
     checkpoint = {'modalities': modalities, 'model': model.state_dict()}
     torch.save(checkpoint, path)
@@ -217,6 +231,8 @@ def main(args):
             pred, _, _, ccc2 = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
+        # Save command line flags, model params and CCC value
+        save_params(args, model, ccc1, ccc2)
         return ccc1, ccc2
 
     # Split training data into chunks
@@ -248,7 +264,10 @@ def main(args):
     # Save final model
     path = os.path.join(args.save_dir, "last.pth") 
     save_checkpoint(args.modalities, model, path)
-        
+
+    # Save command line flags, model params and CCC value
+    save_params(args, model, float('nan'), best_ccc)
+    
     return best_ccc
 
 if __name__ == "__main__":
