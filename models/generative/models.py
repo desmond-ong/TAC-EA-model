@@ -9,11 +9,13 @@ To handle missing modalities, we use the MVAE approach
 described in https://arxiv.org/abs/1802.05335.
 """
 
+from __future__ import division
+from __future__ import print_function
+from __future__ import absolute_import
+
 import math
 import torch
 import torch.nn as nn
-import torch.utils
-import torch.utils.data
 
 class MultiVRNN(nn.Module):
     def __init__(self, modalities, dims, h_dim=256, z_dim=256,
@@ -36,7 +38,7 @@ class MultiVRNN(nn.Module):
                 nn.Linear(h_dim, h_dim),
                 nn.ReLU())
         self.phi_z = nn.Sequential(
-             nn.Linear(z_dim, h_dim),
+            nn.Linear(z_dim, h_dim),
             nn.ReLU())
 
         # Encoder p(z|x) = N(mu(x,h), sigma(x,h))
@@ -73,10 +75,10 @@ class MultiVRNN(nn.Module):
                 nn.ReLU(),
                 nn.Linear(h_dim, h_dim),
                 nn.ReLU())
-            self.dec_mean[m] = nn.Sequential(
+            self.dec_mean[m] = nn.Linear(h_dim, self.dims[m])
+            self.dec_std[m] = nn.Sequential(
                 nn.Linear(h_dim, self.dims[m]),
                 nn.Softplus())
-            self.dec_std[m] = nn.Linear(h_dim, self.dims[m])
         
         # Recurrence h_next = f(z,h)
         self.rnn = nn.GRU(h_dim, h_dim, n_layers, bias)
@@ -104,8 +106,8 @@ class MultiVRNN(nn.Module):
         if mask is None:
             # Set missing data to zero so they are excluded from calculation
             mask = 1 - torch.isnan(var[:,:,0])
-        T = T * mask.unsqueeze(-1)
-        mean = mean * mask.unsqueeze(-1)
+        T = T * mask.float().unsqueeze(-1)
+        mean = mean * mask.float().unsqueeze(-1)
         product_mean = torch.sum(mean * T, dim=0) / torch.sum(T, dim=0)
         product_var = 1. / torch.sum(T, dim=0)
         return product_mean, product_var
@@ -147,16 +149,20 @@ class MultiVRNN(nn.Module):
             z_std_t = [prior_std_t]
             
             # Encode modalities to latent code z
-            for m in inputs.keys():
+            for m in self.modalities:
+                # Ignore missing modalities
+                if m not in inputs:
+                    continue
                 # Extract features
                 phi_m_t = self.phi[m](inputs[m][t])
+                enc_in_t = torch.cat([phi_m_t, h[-1]], 1)
                 # Compute mean and std of latent z given modality m
-                enc_m_t = self.enc[m](phi_m_t)
-                z_mean_m_t = self.enc_mean(enc_m_t)
-                z_std_m_t = self.enc_std(enc_m_t)
+                enc_m_t = self.enc[m](enc_in_t)
+                z_mean_m_t = self.enc_mean[m](enc_m_t)
+                z_std_m_t = self.enc_std[m](enc_m_t)
                 # Concatenate to list of inferred means and stds
-                z_mean_t = z_mean_t.append(z_mean_m_t)
-                z_std_t = z_std_t.append(z_std_m_t)
+                z_mean_t.append(z_mean_m_t)
+                z_std_t.append(z_std_m_t)
 
             # Combine the inferred distributions from each modality using PoE
             z_mean_t = torch.stack(z_mean_t, dim=0)
@@ -247,7 +253,9 @@ class MultiVRNN(nn.Module):
         """Input reconstruction loss."""
         loss = 0.0
         out_mean, out_std = outputs
-        for m in inputs.keys():
+        for m in self.modalities:
+            if m not in inputs:
+                continue
             mult = 1.0 if m not in rec_mults else rec_mults[m]
             loss += mult * self._nll_gauss(out_mean[m], out_std[m],
                                            inputs[m], mask)
@@ -293,3 +301,30 @@ class MultiVRNN(nn.Module):
         nll_element = nll_element.masked_select(mask)
         return torch.sum(nll_element)
     
+if __name__ == "__main__":
+    # Test code by loading dataset and running through model
+    import os, argparse
+    from datasets import load_dataset, seq_collate_dict
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dir', type=str, default="../../data",
+                        help='data directory')
+    parser.add_argument('--subset', type=str, default="Train",
+                        help='whether to load Train/Valid/Test data')
+    args = parser.parse_args()
+
+    print("Loading data...")
+    dataset = load_dataset(['acoustic', 'ratings'],
+                           args.dir, args.subset, base_rate=2.0,
+                           truncate=True, item_as_dict=True)
+    print("Building model...")
+    model = MultiVRNN(['acoustic', 'ratings'], [988, 1],
+                      device=torch.device('cpu'))
+    model.eval()
+    print("Passing a sample through the model...")
+    data, mask, lengths = seq_collate_dict([dataset[0]])
+    infer, prior, outputs = model(data, lengths)
+    out_mean, out_std = outputs
+    print("Predicted ratings:")
+    for o, o_std in zip(out_mean['ratings'], out_std['ratings']):
+        print("{:+0.3f} +- {:0.3f}".format(o.item(), o_std.item()))

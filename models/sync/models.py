@@ -327,8 +327,8 @@ if __name__ == "__main__":
 
     print("Loading data...")
     dataset = load_dataset(['acoustic', 'emotient', 'ratings'],
-                           args.dir, args.subset, truncate=True,
-                           item_as_dict=True)
+                           args.dir, args.subset, base_rate=2.0,
+                           truncate=True, item_as_dict=True)
     print("Building model...")
     model = MultiARLSTM(['acoustic', 'emotient'], [988, 31],
                       device=torch.device('cpu'))
