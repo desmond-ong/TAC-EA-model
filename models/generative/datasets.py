@@ -263,14 +263,14 @@ def load_dataset(modalities, base_dir, subset,
         'acoustic': lambda df : df.drop(columns=['frameIndex', ' frameTime']),
         # Use only GloVe vectors
         'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
-        # Fill in missing emotient data with zeros, use only action units
+        # Fill in missing emotient data with NaNs, use only action units
         'emotient': lambda df : (df.set_index('Frametime')\
                                  .reindex(
                                      np.arange(0.0333667,
                                                max(df['Frametime']),
                                                0.0333667),
                                      axis='index', method='nearest',
-                                     tolerance=1e-3, fill_value=0)\
+                                     tolerance=1e-3, fill_value=float('nan'))\
                                  .reset_index().loc[:,'AU1':'AU43']),
         # Rescale from [0, 100] to [-1, 1]
         'ratings' : lambda df : df.drop(columns=['time']) / 50 - 1

@@ -102,8 +102,8 @@ class MultiVRNN(nn.Module):
         var = var + eps # numerical constant for stability
         # Precision matrix of i-th Gaussian expert (T = 1/sigma^2)
         T = 1. / var
+        # Set missing data to zero so they are excluded from calculation
         if mask is None:
-            # Set missing data to zero so they are excluded from calculation
             mask = 1 - torch.isnan(var[:,:,0])
         T = T * mask.float().unsqueeze(-1)
         mean = mean * mask.float().unsqueeze(-1)
@@ -142,14 +142,20 @@ class MultiVRNN(nn.Module):
             # Accumulate list of the means and std for z
             z_mean_t = [prior_mean_t]
             z_std_t = [prior_std_t]
+            masks = [torch.ones((batch_size,), dtype=torch.uint8,
+                                device=self.device)]
             
             # Encode modalities to latent code z
             for m in self.modalities:
                 # Ignore missing modalities
                 if m not in inputs:
                     continue
-                # Extract features
-                phi_m_t = self.phi[m](inputs[m][t])
+                # Mask out NaNs
+                mask = (1 - torch.isnan(inputs[m][t]).any(dim=1))
+                input_m_t = torch.tensor(inputs[m][t])
+                input_m_t[torch.isnan(input_m_t)] = 0.0
+                # Extract features 
+                phi_m_t = self.phi[m](input_m_t)
                 enc_in_t = torch.cat([phi_m_t, h[-1]], 1)
                 # Compute mean and std of latent z given modality m
                 enc_m_t = self.enc[m](enc_in_t)
@@ -158,13 +164,16 @@ class MultiVRNN(nn.Module):
                 # Concatenate to list of inferred means and stds
                 z_mean_t.append(z_mean_m_t)
                 z_std_t.append(z_std_m_t)
+                masks.append(mask)
 
             # Combine the inferred distributions from each modality using PoE
             z_mean_t = torch.stack(z_mean_t, dim=0)
             z_std_t = torch.stack(z_std_t, dim=0)
+            mask = torch.stack(masks, dim=0)
             infer_mean_t, infer_var_t = \
-                self.product_of_experts(z_mean_t, z_std_t.pow(2))
+                self.product_of_experts(z_mean_t, z_std_t.pow(2), mask)
             infer_std_t = infer_var_t.pow(0.5)
+            
             infer_mean.append(infer_mean_t)
             infer_std.append(infer_std_t)
 
@@ -275,7 +284,8 @@ class MultiVRNN(nn.Module):
             std_2.pow(2) - 1)
         if mask is not None:
             kld_element = kld_element.masked_select(mask)
-        return  0.5 * torch.sum(kld_element)
+        kld =  0.5 * torch.sum(kld_element)
+        return kld
 
     def _nll_bernoulli(self, theta, x, mask=None):
         nll_element = x*torch.log(theta) + (1-x)*torch.log(1-theta)
@@ -287,14 +297,17 @@ class MultiVRNN(nn.Module):
         return torch.sum(nll_element)
 
     def _nll_gauss(self, mean, std, x, mask=None):
-        nll_element = ( ((x-mean).pow(2)) / (2 * std.pow(2)) + std.log() +
-                        math.log(math.sqrt(2 * math.pi)) )
         if mask is None:
             mask = 1 - torch.isnan(x)
         else:
             mask = mask * (1 - torch.isnan(x))
+        x = torch.tensor(x)
+        x[torch.isnan(x)] = 0.0
+        nll_element = ( ((x-mean).pow(2)) / (2 * std.pow(2)) + std.log() +
+                        math.log(math.sqrt(2 * math.pi)) )
         nll_element = nll_element.masked_select(mask)
-        return torch.sum(nll_element)
+        nll = torch.sum(nll_element)
+        return(nll)
     
 if __name__ == "__main__":
     # Test code by loading dataset and running through model

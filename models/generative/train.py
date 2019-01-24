@@ -170,7 +170,7 @@ def save_params(args, model, train_ccc, test_ccc):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
     df = df[['modalities', 'batch_size', 'split', 'epochs', 'lr',
-             'kld_mult', 'sup_mult', 'rec_mult', 'kld_anneal', 'sup_anneal',
+             'kld_mult', 'sup_mult', 'rec_mults', 'kld_anneal', 'sup_anneal',
              'sup_ratio', 'base_rate']]
     df.insert(0, 'test_ccc', [test_ccc])
     df.insert(0, 'train_ccc', [train_ccc])
