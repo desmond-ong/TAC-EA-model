@@ -1,4 +1,4 @@
-"""Training code for synchronous multimodal LSTM model."""
+"""Training code for VRNN model."""
 
 from __future__ import division
 from __future__ import print_function
@@ -19,7 +19,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from datasets import seq_collate_dict, load_dataset
-from models import MultiLSTM, MultiEDLSTM, MultiARLSTM
+from models import MultiVRNN
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -31,29 +31,46 @@ def eval_ccc(y_true, y_pred):
     ccc = 2*covar / (true_var + pred_var +  (pred_mean-true_mean) ** 2)
     return ccc
 
-def train(loader, model, criterion, optimizer, epoch, args):
+def anneal(min_val, max_val, t, anneal_len):
+    if t >= anneal_len:
+        return max_val
+    else:
+        return (max_val - min_val) * t/anneal_len
+
+def train(loader, model, optimizer, epoch, args):
     model.train()
-    data_num = 0
     loss = 0.0
+    data_num = 0
     log_freq = len(loader) // args.log_freq
     # Select batches that should be supervised
     supervised = np.zeros(len(loader), dtype=bool)
     supervised[:int(args.sup_ratio * len(loader))].fill(True)
     np.random.shuffle(supervised)
+    rec_mults = dict(args.rec_mults)
     for batch_num, (data, mask, lengths) in enumerate(loader):
+        # Anneal KLD and supervised loss multipliers
+        batch_tot = batch_num + epoch*len(loader)
+        kld_mult =\
+            anneal(0.0, args.kld_mult, batch_tot, args.kld_anneal*len(loader))
+        sup_mult =\
+            anneal(0.0, args.sup_mult, batch_tot, args.sup_anneal*len(loader))
+        # Add supervised loss multiplier to reconstruction multiplier dict
+        rec_mults['ratings'] = sup_mult
         # Send to device
         mask = mask.to(args.device)
         for m in data.keys():
             data[m] = data[m].to(args.device)
-        # Set whether to use teacher forcing
-        target = data['ratings'] if supervised[batch_num] else None
+        # Set whether to use supervision
+        inputs = dict(data)
+        if not supervised[batch_num]:
+            del inputs['ratings']
         # Run forward pass.
-        output = model(data, mask, lengths, target=target)
+        infer, prior, outputs = model(inputs, lengths)
         # Compute loss and gradients
-        batch_loss = criterion(output, data['ratings'])
-        # Accumulate total loss for epoch
+        batch_loss = model.loss(data, infer, prior, outputs, mask,
+                                kld_mult, rec_mults)
         loss += batch_loss
-        # Average over number of non-padding datapoints before stepping
+        # Average over number of datapoints before stepping
         batch_loss /= sum(lengths)
         batch_loss.backward()
         # Step, then zero gradients
@@ -61,20 +78,21 @@ def train(loader, model, criterion, optimizer, epoch, args):
         optimizer.zero_grad()
         # Keep track of total number of time-points
         data_num += sum(lengths)
-        if batch_num % log_freq == 0:
-            print('Batch: {:5d}\tLoss: {:2.5f}'.\
-                  format(batch_num, loss/data_num))
+        print('Batch: {:5d}\tLoss: {:10.1f}'.\
+              format(batch_num, loss/data_num))
     # Average losses and print
     loss /= data_num
     print('---')
-    print('Epoch: {}\tLoss: {:2.5f}'.format(epoch, loss))
+    print('Epoch: {}\tLoss: {:10.1f}\tB_KLD: {:0.3f}\tB_Sup: {:5.2f}'.\
+          format(epoch, loss, kld_mult, sup_mult))
     return loss
 
-def evaluate(dataset, model, criterion, args, fig_path=None):
+def evaluate(dataset, model, args, fig_path=None):
     model.eval()
     predictions = []
     data_num = 0
-    loss, corr, ccc = 0.0, [], []
+    kld_loss, rec_loss, sup_loss = 0.0, 0.0, 0.0
+    corr, ccc = [], []
     for data, orig in zip(dataset, dataset.orig['ratings']):
         # Collate data into batch dictionary of size 1
         data, mask, lengths = seq_collate_dict([data])
@@ -82,14 +100,21 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
         mask = mask.to(args.device)
         for m in data.keys():
             data[m] = data[m].to(args.device)
-        # Run forward pass
-        output = model(data, mask, lengths)
-        # Compute loss
-        loss += criterion(output, data['ratings'])
+        # Separate target modality from input modalities
+        target = {'ratings': data['ratings']}
+        inputs = dict(data)
+        del inputs['ratings']
+        # Run forward pass using input modalities
+        infer, prior, outputs = model(inputs, lengths)
+        # Compute and store KLD, reconstruction and supervised losses
+        kld_loss += model.kld_loss(infer, prior, mask)
+        rec_loss += model.rec_loss(inputs, outputs, mask, args.rec_mults)
+        sup_loss += model.rec_loss(target, outputs, mask)
         # Keep track of total number of time-points
-        data_num += data['length']
+        data_num += sum(lengths)
         # Resize predictions to match original length
-        pred = output[0,:data['length']].view(-1).cpu().numpy()
+        out_mean, _ = outputs
+        pred = out_mean['ratings'][:lengths[0], 0].view(-1).cpu().numpy()
         pred = np.repeat(pred, int(dataset.ratios['ratings']))[:len(orig)]
         if len(pred) < len(orig):
             pred = np.concatenate((pred, pred[len(pred)-len(orig):]))
@@ -101,12 +126,17 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
     if args.visualize:
         plot_predictions(dataset, predictions, ccc, args, fig_path)
     # Average losses and print
-    loss /= data_num
+    kld_loss /= data_num
+    rec_loss /= data_num
+    sup_loss /= data_num
+    losses = kld_loss, rec_loss, sup_loss
+    print('Evaluation\tKLD: {:7.1f}\tRecon: {:7.1f}\tSup: {:7.1f}'.\
+          format(*losses))
+    # Average statistics and print
     corr = sum(corr) / len(corr)
     ccc = sum(ccc) / len(ccc)
-    print('Evaluation\tLoss: {:2.5f}\tCorr: {:0.3f}\tCCC: {:0.3f}'.\
-          format(loss, corr, ccc))
-    return predictions, loss, corr, ccc
+    print('Corr: {:0.3f}\tCCC: {:0.3f}'.format(corr, ccc))
+    return predictions, losses, corr, ccc
 
 def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     """Plots predictions against ratings for representative fits."""
@@ -140,17 +170,13 @@ def save_params(args, model, train_ccc, test_ccc):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
     df = df[['modalities', 'batch_size', 'split', 'epochs', 'lr',
+             'kld_mult', 'sup_mult', 'rec_mult', 'kld_anneal', 'sup_anneal',
              'sup_ratio', 'base_rate']]
     df.insert(0, 'test_ccc', [test_ccc])
     df.insert(0, 'train_ccc', [train_ccc])
     df.insert(0, 'model', [model.__class__.__name__])
-    df['embed_dim'] = model.embed_dim
     df['h_dim'] = model.h_dim
-    df['attn_len'] = model.attn_len
-    if type(model) is MultiARLSTM:
-        df['ar_order'] = [model.decay.item()]
-    else:
-        df['ar_order'] = [float('nan')]
+    df['h_dim'] = model.z_dim
     df.set_index('model')
     df.to_csv(fname, mode='a', header=(not os.path.exists(fname)), sep='\t')
         
@@ -203,15 +229,19 @@ def main(args):
     train_data, test_data = load_data(args.modalities, args.data_dir)
     
     # Construct multimodal LSTM model
-    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
-    model = MultiEDLSTM(args.modalities,
-                        dims=(dims[m] for m in args.modalities),
-                        device=args.device)
+    dims = {'acoustic': 988, 'linguistic': 300,
+            'emotient': 20, 'ratings': 1}
+    model = MultiVRNN(args.modalities + ['ratings'],
+                      dims=(dims[m] for m in (args.modalities + ['ratings'])),
+                      device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
+    # Default reconstruction loss multipliers
+    if args.rec_mults is None:
+        args.rec_mults = {m : (1.0 / dims[m]) for m in args.modalities}
+        
     # Setup loss and optimizer
-    criterion = nn.MSELoss(reduction='sum')
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     # Create path to save models/predictions
@@ -233,10 +263,10 @@ def main(args):
             os.makedirs(pred_test_dir)
         # Evaluate on both training and test set
         with torch.no_grad():
-            pred, _, _, ccc1 = evaluate(train_data, model, criterion, args,
+            pred, _, _, ccc1 = evaluate(train_data, model, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
-            pred, _, _, ccc2 = evaluate(test_data, model, criterion, args,
+            pred, _, _, ccc2 = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
         # Save command line flags, model params and CCC value
@@ -254,19 +284,18 @@ def main(args):
     best_ccc = -1
     for epoch in range(1, args.epochs + 1):
         print('---')
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
                 pred, loss, corr, ccc =\
-                    evaluate(test_data, model, criterion, args)
+                    evaluate(test_data, model, args)
             if ccc > best_ccc:
                 best_ccc = ccc
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
         # Save checkpoints
         if epoch % args.save_freq == 0:
-            path = os.path.join(args.save_dir,
-                                "epoch_{}.pth".format(epoch)) 
+            path = os.path.join(args.save_dir, "epoch_{}.pth".format(epoch)) 
             save_checkpoint(args.modalities, model, path)
 
     # Save final model
@@ -294,6 +323,16 @@ if __name__ == "__main__":
                         help='teacher-forcing ratio (default: 0.5)')
     parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
                         help='sampling rate to resample to (default: 2.0)')
+    parser.add_argument('--kld_mult', type=float, default=1.0, metavar='F',
+                        help='max kld loss multiplier (default: 1.0)')
+    parser.add_argument('--sup_mult', type=float, default=100, metavar='F',
+                        help='max supervised loss multiplier (default: 100)')
+    parser.add_argument('--rec_mults', type=float, default=None, nargs='+',
+                        help='reconstruction loss multiplier (default: 1/dims')
+    parser.add_argument('--kld_anneal', type=int, default=500, metavar='N',
+                        help='epochs to increase kld_mult over (default: 500)')
+    parser.add_argument('--sup_anneal', type=int, default=1e3, metavar='N',
+                        help='epochs to increase sup_mult over (default: 1e3)')
     parser.add_argument('--log_freq', type=int, default=5, metavar='N',
                         help='print loss N times every epoch (default: 5)')
     parser.add_argument('--eval_freq', type=int, default=1, metavar='N',

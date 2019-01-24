@@ -32,7 +32,6 @@ class MultiVRNN(nn.Module):
         self.phi = nn.ModuleDict()
         for m in self.modalities:
             self.phi[m] = nn.Sequential(
-                nn.Dropout(p=0.1),
                 nn.Linear(self.dims[m], h_dim),
                 nn.ReLU(),
                 nn.Linear(h_dim, h_dim),
@@ -133,10 +132,6 @@ class MultiVRNN(nn.Module):
         h = torch.zeros(self.n_layers, batch_size, self.h_dim).to(self.device)
             
         for t in range(seq_len):
-            # Create mask of present modalities
-            mask = torch.stack([1 - torch.isnan(inputs[m][t,:,0])
-                                for m in self.modalities], dim=0)
-
             # Compute prior for z
             prior_t = self.prior(h[-1])
             prior_mean_t = self.prior_mean(prior_t)
@@ -238,7 +233,7 @@ class MultiVRNN(nn.Module):
             if type(mask) is torch.Tensor:
                 n_data = torch.sum(mask)
             else:
-                n_data = inputs[self.modalities[0]].numel()
+                n_data = inputs[self.modalities[-1]].numel()
             loss /= n_data
         return loss
     
