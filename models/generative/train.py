@@ -43,9 +43,6 @@ def train(loader, model, optimizer, epoch, args):
     data_num = 0
     log_freq = len(loader) // args.log_freq
     # Select batches that should be supervised
-    supervised = np.zeros(len(loader), dtype=bool)
-    supervised[:int(args.sup_ratio * len(loader))].fill(True)
-    np.random.shuffle(supervised)
     rec_mults = dict(args.rec_mults)
     for batch_num, (data, mask, lengths) in enumerate(loader):
         # Anneal KLD and supervised loss multipliers
@@ -60,10 +57,13 @@ def train(loader, model, optimizer, epoch, args):
         mask = mask.to(args.device)
         for m in data.keys():
             data[m] = data[m].to(args.device)
-        # Set whether to use supervision
+        # Select random samples within batch to be unsupervised
+        batch_size = len(lengths)
+        unsup_idx = np.random.choice(batch_size, replace=False,
+                                     size=int(args.sup_ratio * batch_size))
         inputs = dict(data)
-        if not supervised[batch_num]:
-            del inputs['ratings']
+        inputs['ratings'] = torch.tensor(data['ratings'])
+        inputs['ratings'][:,unsup_idx,:] = float('nan')
         # Run forward pass.
         infer, prior, outputs = model(inputs, lengths)
         # Compute loss and gradients
