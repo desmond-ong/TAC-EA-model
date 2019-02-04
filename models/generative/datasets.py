@@ -175,7 +175,7 @@ class MultiseqDataset(Dataset):
             # Mean-variance normalization
             m_mean, m_std = ref_data.mean_and_std(modalities)
             for m in modalities:
-                self.data[m] = [(a-m_mean[m]) / m_std[m] for
+                self.data[m] = [(a-m_mean[m]) / (m_std[m] + 1e-10) for
                                 a in self.data[m]]
 
     def normalize(self, modalities=None, method='meanvar', ref_data=None):

@@ -188,7 +188,7 @@ def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device)
     return checkpoint
 
-def load_data(modalities, data_dir):
+def load_data(modalities, data_dir, normalize=[]):
     print("Loading data...")
     train_data = load_dataset(modalities, data_dir, 'Train',
                               base_rate=args.base_rate,
@@ -197,6 +197,12 @@ def load_data(modalities, data_dir):
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
+    if len(normalize) > 0:
+        print("Normalizing ", normalize, "...")
+        # Normalize test data using training data as reference
+        test_data.normalize_(modalities=normalize, ref_data=train_data)
+        # Normailze training data in-place
+        train_data.normalize_(modalities=normalize)
     return train_data, test_data
 
 def main(args):
@@ -226,7 +232,8 @@ def main(args):
         args.modalities = ['acoustic', 'linguistic', 'emotient']
 
     # Load data for specified modalities
-    train_data, test_data = load_data(args.modalities, args.data_dir)
+    train_data, test_data = load_data(args.modalities, args.data_dir,
+                                      args.normalize)
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300,
@@ -343,8 +350,8 @@ if __name__ == "__main__":
                         help='device to use (default: cuda:0 if available)')
     parser.add_argument('--visualize', action='store_true', default=False,
                         help='flag to visualize predictions (default: false)')
-    parser.add_argument('--normalize', action='store_true', default=False,
-                        help='whether to normalize inputs (default: false)')
+    parser.add_argument('--normalize', type=str, default=[], nargs='+',
+                        help='modalities to normalize (default: [])')
     parser.add_argument('--test', action='store_true', default=False,
                         help='evaluate without training (default: false)')
     parser.add_argument('--load', type=str, default=None,
