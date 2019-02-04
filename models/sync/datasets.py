@@ -133,26 +133,55 @@ class MultiseqDataset(Dataset):
         else:
             return tuple(self.data[m][i] for m in self.modalities)
         
-    def normalize_(self):
-        """Rescale all inputs to [-1, 1] range (in-place)."""
-        # Find max and min for each dimension of each modality
-        m_max = {m: np.stack([a.max(0) for a in self.data[m]]).max(0)
-                  for m in self.modalities}
-        m_min = {m: np.stack([a.min(0) for a in self.data[m]]).min(0)
-                  for m in self.modalities}
-        # Compute range per dim and add constant to ensure it is non-zero
-        m_rng = {m: (m_max[m]-m_min[m]) for m in self.modalities}
-        m_rng = {m: m_rng[m] * (m_rng[m] > 0) + 1e-10 * (m_rng[m] <= 0)
-                  for m in self.modalities}
-        # Actually rescale the data
-        for m in self.modalities:
-            self.data[m] = [(a-m_min[m]) / m_rng[m] * 2 - 1 for
-                               a in self.data[m]]
+    def mean_and_std(self, modalities=None):
+        """Compute mean+std across time and samples for given modalities."""
+        if modalities is None:
+            modalities = self.modalities
+        m_mean = {m: np.nanmean(np.concatenate(self.data[m], 0), axis=0)
+                  for m in modalities}
+        m_std = {m: np.nanstd(np.concatenate(self.data[m], 0), axis=0)
+                 for m in modalities}
+        return m_mean, m_std
 
-    def normalize(self):
-        """Rescale all inputs to [-1, 1] range (returns new dataset)."""
+    def max_and_min(self, modalities=None):
+        """Compute max+min across time and samples for given modalities."""
+        if modalities is None:
+            modalities = self.modalities
+        m_max = {m: np.nanmax(np.stack([a.max(0) for a in self.data[m]]), 0)
+                 for m in modalities}
+        m_min = {m: np.nanmin(np.stack([a.min(0) for a in self.data[m]]), 0)
+                 for m in modalities}
+        return m_max, m_min
+    
+    def normalize_(self, modalities=None, method='meanvar', ref_data=None):
+        """Normalize data either by mean-and-variance or to [-1,1])."""
+        if modalities is None:
+            # Default to all modalities
+            modalities = self.modalities
+        if ref_data is None:
+            # Default to computing stats over self
+            ref_data = self
+        if method == 'range':
+            # Range normalization
+            m_max, m_min = ref_data.max_and_min(modalities)
+            # Compute range per dim and add constant to ensure it is non-zero
+            m_rng = {m: (m_max[m]-m_min[m]) for m in modalities}
+            m_rng = {m: m_rng[m] * (m_rng[m] > 0) + 1e-10 * (m_rng[m] <= 0)
+                     for m in modalities}
+            for m in modalities:
+                self.data[m] = [(a-m_min[m]) / m_rng[m] * 2 - 1 for
+                                a in self.data[m]]
+        else:
+            # Mean-variance normalization
+            m_mean, m_std = ref_data.mean_and_std(modalities)
+            for m in modalities:
+                self.data[m] = [(a-m_mean[m]) / (m_std[m] + 1e-10) for
+                                a in self.data[m]]
+
+    def normalize(self, modalities=None, method='meanvar', ref_data=None):
+        """Normalize data (returns new dataset)."""
         dataset = copy.deepcopy(self)
-        dataset.normalize_()
+        dataset.normalize_(modalities, method, ref_data)
         return dataset
             
     def split_(self, n):
@@ -286,11 +315,18 @@ if __name__ == "__main__":
                         help='data directory')
     parser.add_argument('--subset', type=str, default="Train",
                         help='whether to load Train/Valid/Test data')
+    parser.add_argument('--modalities', type=str, default=None, nargs='+',
+                        help='input modalities (default: all')
+    parser.add_argument('--stats', action='store_true', default=False,
+                        help='whether to compute and print statistics')
     args = parser.parse_args()
 
     print("Loading data...")
-    modalities = ['acoustic', 'linguistic', 'emotient', 'ratings']
-    dataset = load_dataset(modalities, args.dir, args.subset)
+    if args.modalities is None:
+        modalities = ['acoustic', 'linguistic', 'emotient', 'ratings']
+    else:
+        modalities = args.modalities
+    dataset = load_dataset(modalities, args.dir, args.subset, base_rate=2.0)
     print("Testing batch collation...")
     data = seq_collate([dataset[i] for i in range(min(10, len(dataset)))])
     print("Batch shapes:")
@@ -306,3 +342,14 @@ if __name__ == "__main__":
                 len(linguistic) == len(ratings) and 
                 len(emotient) == len(ratings)):
             print("WARNING: Mismatched sequence lengths.")
+
+    if args.stats:
+        print("Statistics:")
+        m_mean, m_std = dataset.mean_and_std()
+        m_max, m_min = dataset.max_and_min()
+        for m in modalities:
+            print("--", m, "--")
+            print("Mean:", m_mean[m])
+            print("Std:", m_std[m])
+            print("Max:", m_max[m])
+            print("Min:", m_min[m])
