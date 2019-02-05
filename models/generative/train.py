@@ -64,11 +64,21 @@ def train(loader, model, optimizer, epoch, args):
         inputs = dict(data)
         inputs['ratings'] = torch.tensor(data['ratings'])
         inputs['ratings'][:,unsup_idx,:] = float('nan')
-        # Run forward pass.
+        # Run forward pass with all input modalities
         infer, prior, outputs = model(inputs, lengths)
-        # Compute loss and gradients
+        # Compute ELBO loss for all input modalities
         batch_loss = model.loss(data, infer, prior, outputs, mask,
                                 kld_mult, rec_mults)
+        # Compute ELBO loss for individual input modalities
+        if len(args.modalities) > 1:
+            for m in args.modalities:
+                # Provide only modality m + ratings (which maybe be missing)
+                m_inputs = {m: inputs[m], 'ratings': inputs['ratings']}
+                infer, prior, outputs = model(m_inputs, lengths)
+                # Compute ELBO loss for modality m and ratings
+                m_inputs['ratings'] = data['ratings']
+                batch_loss += model.loss(m_inputs, infer, prior, outputs, mask,
+                                         kld_mult, rec_mults)
         loss += batch_loss
         # Average over number of datapoints before stepping
         batch_loss /= sum(lengths)
@@ -169,7 +179,7 @@ def save_predictions(dataset, predictions, path):
 def save_params(args, model, train_ccc, test_ccc):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
-    df = df[['modalities', 'batch_size', 'split', 'epochs', 'lr',
+    df = df[['modalities', 'normalize', 'batch_size', 'split', 'epochs', 'lr',
              'kld_mult', 'sup_mult', 'rec_mults', 'kld_anneal', 'sup_anneal',
              'sup_ratio', 'base_rate']]
     df.insert(0, 'test_ccc', [test_ccc])
