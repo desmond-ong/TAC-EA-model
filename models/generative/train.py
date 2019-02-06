@@ -179,9 +179,9 @@ def save_predictions(dataset, predictions, path):
 def save_params(args, model, train_ccc, test_ccc):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
-    df = df[['modalities', 'normalize', 'batch_size', 'split', 'epochs', 'lr',
-             'kld_mult', 'sup_mult', 'rec_mults', 'kld_anneal', 'sup_anneal',
-             'sup_ratio', 'base_rate']]
+    df = df[['save_dir', 'modalities', 'normalize', 'batch_size', 'split',
+             'epochs', 'lr', 'kld_mult', 'sup_mult', 'rec_mults',
+             'kld_anneal', 'sup_anneal', 'sup_ratio', 'base_rate']]
     df.insert(0, 'test_ccc', [test_ccc])
     df.insert(0, 'train_ccc', [train_ccc])
     df.insert(0, 'model', [model.__class__.__name__])
@@ -280,9 +280,11 @@ def main(args):
             os.makedirs(pred_test_dir)
         # Evaluate on both training and test set
         with torch.no_grad():
+            print("--Training--")
             pred, _, _, ccc1 = evaluate(train_data, model, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
+            print("--Testing--")
             pred, _, _, ccc2 = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
