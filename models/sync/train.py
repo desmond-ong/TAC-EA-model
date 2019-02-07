@@ -87,9 +87,9 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
         # Compute loss
         loss += criterion(output, data['ratings'])
         # Keep track of total number of time-points
-        data_num += data['length']
+        data_num += sum(lengths)
         # Resize predictions to match original length
-        pred = output[0,:data['length']].view(-1).cpu().numpy()
+        pred = output[0,:lengths[0]].view(-1).cpu().numpy()
         pred = np.repeat(pred, int(dataset.ratios['ratings']))[:len(orig)]
         if len(pred) < len(orig):
             pred = np.concatenate((pred, pred[len(pred)-len(orig):]))
@@ -102,11 +102,12 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
         plot_predictions(dataset, predictions, ccc, args, fig_path)
     # Average losses and print
     loss /= data_num
-    corr = sum(corr) / len(corr)
-    ccc = sum(ccc) / len(ccc)
+    # Average statistics and print
+    stats = {'corr': np.mean(corr), 'corr_std': np.std(corr),
+             'ccc': np.mean(ccc), 'ccc_std': np.std(ccc)}
     print('Evaluation\tLoss: {:2.5f}\tCorr: {:0.3f}\tCCC: {:0.3f}'.\
-          format(loss, corr, ccc))
-    return predictions, loss, corr, ccc
+          format(loss, stats['corr'], stats['ccc']))
+    return predictions, loss, stats
 
 def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     """Plots predictions against ratings for representative fits."""
@@ -136,13 +137,17 @@ def save_predictions(dataset, predictions, path):
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
 
-def save_params(args, model, train_ccc, test_ccc):
+def save_params(args, model, train_stats, test_stats):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
     df = df[['modalities', 'batch_size', 'split', 'epochs', 'lr',
              'sup_ratio', 'base_rate']]
-    df.insert(0, 'test_ccc', [test_ccc])
-    df.insert(0, 'train_ccc', [train_ccc])
+    for k in ['ccc_std', 'ccc']:
+        v = train_stats.get(k, float('nan'))
+        df.insert(0, 'train_' + k, v)
+    for k in ['ccc_std', 'ccc']:
+        v = test_stats.get(k, float('nan'))
+        df.insert(0, 'test_' + k, v)
     df.insert(0, 'model', [model.__class__.__name__])
     df['embed_dim'] = model.embed_dim
     df['h_dim'] = model.h_dim
@@ -204,9 +209,9 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
-    model = MultiEDLSTM(args.modalities,
-                        dims=(dims[m] for m in args.modalities),
-                        device=args.device)
+    model = MultiLSTM(args.modalities,
+                      dims=(dims[m] for m in args.modalities),
+                      device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
@@ -233,15 +238,15 @@ def main(args):
             os.makedirs(pred_test_dir)
         # Evaluate on both training and test set
         with torch.no_grad():
-            pred, _, _, ccc1 = evaluate(train_data, model, criterion, args,
+            pred, _, train_stats= evaluate(train_data, model, criterion, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
-            pred, _, _, ccc2 = evaluate(test_data, model, criterion, args,
+            pred, _, test_stats = evaluate(test_data, model, criterion, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
         # Save command line flags, model params and CCC value
-        save_params(args, model, ccc1, ccc2)
-        return ccc1, ccc2
+        save_params(args, model, train_stats, test_stats)
+        return train_stats['ccc'], test_stats['ccc']
 
     # Split training data into chunks
     train_data = train_data.split(args.split)
@@ -252,15 +257,17 @@ def main(args):
    
     # Train and save best model
     best_ccc = -1
+    best_stats = dict()
     for epoch in range(1, args.epochs + 1):
         print('---')
         train(train_loader, model, criterion, optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
-                pred, loss, corr, ccc =\
+                pred, loss, stats =\
                     evaluate(test_data, model, criterion, args)
-            if ccc > best_ccc:
-                best_ccc = ccc
+            if stats['ccc'] > best_ccc:
+                best_ccc = stats['ccc']
+                best_stats = stats
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
         # Save checkpoints
@@ -273,8 +280,8 @@ def main(args):
     path = os.path.join(args.save_dir, "last.pth") 
     save_checkpoint(args.modalities, model, path)
 
-    # Save command line flags, model params and CCC value
-    save_params(args, model, float('nan'), best_ccc)
+    # Save command line flags, model params and performance statistics
+    save_params(args, model, dict(), best_stats)
     
     return best_ccc
 

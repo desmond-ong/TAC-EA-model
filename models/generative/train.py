@@ -183,9 +183,11 @@ def save_params(args, model, train_stats, test_stats):
              'epochs', 'lr', 'kld_mult', 'sup_mult', 'rec_mults',
              'kld_anneal', 'sup_anneal', 'sup_ratio', 'base_rate']]
     for k in ['ccc_std', 'ccc']:
-        df.insert(0, 'train_' + k, train_stats[k])
+        v = train_stats.get(k, float('nan'))
+        df.insert(0, 'train_' + k, v)
     for k in ['ccc_std', 'ccc']:
-        df.insert(0, 'test_' + k, test_stats[k])
+        v = test_stats.get(k, float('nan'))
+        df.insert(0, 'test_' + k, v)
     df.insert(0, 'model', [model.__class__.__name__])
     df['h_dim'] = model.h_dim
     df['z_dim'] = model.z_dim
@@ -304,6 +306,7 @@ def main(args):
    
     # Train and save best model
     best_ccc = -1
+    best_stats = dict()
     for epoch in range(1, args.epochs + 1):
         print('---')
         train(train_loader, model, optimizer, epoch, args)
@@ -313,6 +316,7 @@ def main(args):
                     evaluate(test_data, model, args)
             if stats['ccc'] > best_ccc:
                 best_ccc = stats['ccc']
+                best_stats = stats
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
         # Save checkpoints
@@ -324,8 +328,8 @@ def main(args):
     path = os.path.join(args.save_dir, "last.pth") 
     save_checkpoint(args.modalities, model, path)
 
-    # Save command line flags, model params and CCC value
-    save_params(args, model, float('nan'), best_ccc)
+    # Save command line flags, model params and performance statistics
+    save_params(args, model, dict(), best_stats)
     
     return best_ccc
 
