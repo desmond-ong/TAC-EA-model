@@ -186,7 +186,8 @@ def save_params(args, model, train_ccc, test_ccc):
     df.insert(0, 'train_ccc', [train_ccc])
     df.insert(0, 'model', [model.__class__.__name__])
     df['h_dim'] = model.h_dim
-    df['h_dim'] = model.z_dim
+    df['z_dim'] = model.z_dim
+    df['dropouts'] = model.dropouts
     df.set_index('model')
     df.to_csv(fname, mode='a', header=(not os.path.exists(fname)), sep='\t')
         
@@ -248,8 +249,12 @@ def main(args):
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300,
             'emotient': 20, 'ratings': 1}
-    model = MultiVRNN(args.modalities + ['ratings'],
-                      dims=(dims[m] for m in (args.modalities + ['ratings'])),
+    dropouts = {'acoustic': 0.2, 'linguistic': 0.0,
+                'emotient': 0.0, 'ratings': 0.0}
+    modalities = args.modalities + ['ratings']
+    model = MultiVRNN(modalities,
+                      dims=(dims[m] for m in modalities),
+                      dropouts=(dropouts[m] for m in modalities),
                       device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])

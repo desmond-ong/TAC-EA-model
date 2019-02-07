@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 
 class MultiVRNN(nn.Module):
-    def __init__(self, modalities, dims, h_dim=256, z_dim=256,
+    def __init__(self, modalities, dims, dropouts=None, h_dim=256, z_dim=256,
                  n_layers=1, bias=False, device=torch.device('cuda:0')):
         super(MultiVRNN, self).__init__()
         self.modalities = modalities
@@ -28,11 +28,16 @@ class MultiVRNN(nn.Module):
         self.z_dim = z_dim
         self.n_layers = n_layers
 
+        if dropouts is None:
+            dropouts = [0.0] * self.n_mods
+        self.dropouts = dict(zip(modalities, dropouts))
+        
         # Feature-extracting transformations
         self.phi = nn.ModuleDict()
         for m in self.modalities:
             self.phi[m] = nn.Sequential(
                 nn.Linear(self.dims[m], h_dim),
+                nn.Dropout(self.dropouts[m]),
                 nn.ReLU(),
                 nn.Linear(h_dim, h_dim),
                 nn.ReLU())
