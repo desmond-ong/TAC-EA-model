@@ -143,10 +143,10 @@ def evaluate(dataset, model, args, fig_path=None):
     print('Evaluation\tKLD: {:7.1f}\tRecon: {:7.1f}\tSup: {:7.1f}'.\
           format(*losses))
     # Average statistics and print
-    corr = sum(corr) / len(corr)
-    ccc = sum(ccc) / len(ccc)
-    print('Corr: {:0.3f}\tCCC: {:0.3f}'.format(corr, ccc))
-    return predictions, losses, corr, ccc
+    stats = {'corr': np.mean(corr), 'corr_std': np.std(corr),
+             'ccc': np.mean(ccc), 'ccc_std': np.std(ccc)}
+    print('Corr: {:0.3f}\tCCC: {:0.3f}'.format(stats['corr'], stats['ccc']))
+    return predictions, losses, stats
 
 def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     """Plots predictions against ratings for representative fits."""
@@ -176,17 +176,19 @@ def save_predictions(dataset, predictions, path):
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
 
-def save_params(args, model, train_ccc, test_ccc):
+def save_params(args, model, train_stats, test_stats):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
     df = df[['save_dir', 'modalities', 'normalize', 'batch_size', 'split',
              'epochs', 'lr', 'kld_mult', 'sup_mult', 'rec_mults',
              'kld_anneal', 'sup_anneal', 'sup_ratio', 'base_rate']]
-    df.insert(0, 'test_ccc', [test_ccc])
-    df.insert(0, 'train_ccc', [train_ccc])
+    for k in ['ccc_std', 'ccc']:
+        df.insert(0, 'train_' + k, train_stats[k])
+    for k in ['ccc_std', 'ccc']:
+        df.insert(0, 'test_' + k, test_stats[k])
     df.insert(0, 'model', [model.__class__.__name__])
     df['h_dim'] = model.h_dim
-    df['h_dim'] = model.z_dim
+    df['z_dim'] = model.z_dim
     df.set_index('model')
     df.to_csv(fname, mode='a', header=(not os.path.exists(fname)), sep='\t')
         
@@ -282,16 +284,16 @@ def main(args):
         # Evaluate on both training and test set
         with torch.no_grad():
             print("--Training--")
-            pred, _, _, ccc1 = evaluate(train_data, model, args,
+            pred, _, train_stats = evaluate(train_data, model, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
             print("--Testing--")
-            pred, _, _, ccc2 = evaluate(test_data, model, args,
+            pred, _, test_stats = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
         # Save command line flags, model params and CCC value
-        save_params(args, model, ccc1, ccc2)
-        return ccc1, ccc2
+        save_params(args, model, train_stats, test_stats)
+        return train_stats['ccc'], test_stats['ccc']
 
     # Split training data into chunks
     train_data = train_data.split(args.split)
@@ -307,10 +309,10 @@ def main(args):
         train(train_loader, model, optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
-                pred, loss, corr, ccc =\
+                pred, loss, stats =\
                     evaluate(test_data, model, args)
-            if ccc > best_ccc:
-                best_ccc = ccc
+            if stats['ccc'] > best_ccc:
+                best_ccc = stats['ccc']
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
         # Save checkpoints
