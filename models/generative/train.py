@@ -256,7 +256,8 @@ def main(args):
 
     # Default reconstruction loss multipliers
     if args.rec_mults is None:
-        args.rec_mults = {m : (1.0 / dims[m]) for m in args.modalities}
+        args.rec_mults = {m : (1.0 / dims[m]) / len(args.modalities)
+                          for m in args.modalities}
         
     # Setup loss and optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
