@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from nltk.corpus import stopwords
+# from nltk.corpus import stopwords
 
 class MultiseqDataset(Dataset):
     """Multimodal dataset for asynchronous sequential data."""
@@ -238,11 +238,11 @@ def seq_collate_dict(data):
 def load_dataset(modalities, base_dir, subset, target='ratings',
                  time_tol=1.0/30, item_as_dict=False):
     """Helper function specifically for loading TAC-EA datasets."""
-    s_words = set(stopwords.words('english'))
+   #  s_words = set(stopwords.words('english'))
     dirs = {
         'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
         'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
-#       'linguistic': os.path.join(base_dir, 'features', subset, 'word-level'),
+      # 'linguistic': os.path.join(base_dir, 'features', subset, 'word-level'),
         'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
         'ratings' : os.path.join(base_dir, 'ratings', subset, 'observer_avg')
         # 'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
