@@ -88,7 +88,7 @@ def evaluate(dataset, model, args, fig_path=None):
         data_num += obs_num
         # Resample predictions to match original length and sampling rate
         t_pred, v_pred = t_pred[0].cpu().numpy(), v_pred[0].cpu().numpy()
-        t_orig, v_orig = orig['time'].values, orig[' rating'].values
+        t_orig, v_orig = orig['time'].values, orig['rating'].values
         pred = pd.Series(v_pred, index=t_pred).sort_index()
         pred = pred[~pred.index.duplicated(keep='first')]
         pred = pred.reindex(t_orig, method='ffill')
@@ -101,13 +101,14 @@ def evaluate(dataset, model, args, fig_path=None):
     # Plot predictions against ratings
     if args.visualize:
         plot_predictions(dataset, predictions, ccc, args, fig_path)
-    # Average losses and print
+    # Average losses
     loss /= data_num
-    corr = sum(corr) / len(corr)
-    ccc = sum(ccc) / len(ccc)
+    # Average statistics and print
+    stats = {'corr': np.mean(corr), 'corr_std': np.std(corr),
+             'ccc': np.mean(ccc), 'ccc_std': np.std(ccc)}
     print('Evaluation\tLoss: {:2.5f}\tCorr: {:0.3f}\tCCC: {:0.3f}'.\
-          format(loss, corr, ccc))
-    return predictions, loss, corr, ccc
+          format(loss, stats['corr'], stats['ccc']))
+    return predictions, loss, stats
 
 def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     """Plots predictions against ratings for representative fits."""
@@ -115,7 +116,7 @@ def plot_predictions(dataset, predictions, metric, args, fig_path=None):
     sel_idx = np.concatenate((np.argsort(metric)[-4:][::-1],
                               np.argsort(metric)[:4]))
     sel_metric = [metric[i] for i in sel_idx]
-    sel_true = [dataset.orig['ratings'][i][' rating'] for i in sel_idx]
+    sel_true = [dataset.orig['ratings'][i]['rating'] for i in sel_idx]
     sel_pred = [predictions[i] for i in sel_idx]
     for i, (true, pred, m) in enumerate(zip(sel_true, sel_pred, sel_metric)):
         j, i = (i // 4), (i % 4)
@@ -137,12 +138,16 @@ def save_predictions(dataset, predictions, path):
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
 
-def save_params(args, model, train_ccc, test_ccc):
+def save_params(args, model, train_stats, test_stats):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
     df = df[['modalities', 'batch_size', 'split', 'epochs', 'lr', 'lambda_t']]
-    df.insert(0, 'test_ccc', [test_ccc])
-    df.insert(0, 'train_ccc', [train_ccc])
+    for k in ['ccc_std', 'ccc']:
+        v = train_stats.get(k, float('nan'))
+        df.insert(0, 'train_' + k, v)
+    for k in ['ccc_std', 'ccc']:
+        v = test_stats.get(k, float('nan'))
+        df.insert(0, 'test_' + k, v)
     df.insert(0, 'model', [model.__class__.__name__])
     if type(model) is SemiParamNPP:
         df['decay'] = [model.decay.item()]
@@ -225,15 +230,15 @@ def main(args):
             os.makedirs(pred_test_dir)
         # Evaluate on both training and test set
         with torch.no_grad():
-            pred, _, _, ccc1 = evaluate(train_data, model, args,
+            pred, _, train_stats = evaluate(train_data, model, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
-            pred, _, _, ccc2 = evaluate(test_data, model, args,
+            pred, _, test_stats = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)
         # Save command line flags, model params and CCC value
-        save_params(args, model, ccc1, ccc2)
-        return ccc1, ccc2
+        save_params(args, model, train_stats, test_stats)
+        return train_stats['ccc'], test_stats['ccc']
 
     # Split training data into chunks
     train_data = train_data.split(args.split)
@@ -244,15 +249,16 @@ def main(args):
    
     # Train and save best model
     best_ccc = -1
+    best_stats = dict()
     for epoch in range(1, args.epochs + 1):
         print('---')
         train(train_loader, model, optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
-                pred, loss, corr, ccc =\
-                    evaluate(test_data, model, args)
-            if ccc > best_ccc:
-                best_ccc = ccc
+                pred, loss, stats = evaluate(test_data, model, args)
+            if stats['ccc'] > best_ccc:
+                best_ccc = stats['ccc']
+                best_stats = stats
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
         # Save checkpoints
@@ -265,8 +271,8 @@ def main(args):
     path = os.path.join(args.save_dir, "last.pth") 
     save_checkpoint(args.modalities, model, path)
 
-    # Save command line flags, model params and CCC value
-    save_params(args, model, float('nan'), best_ccc)
+    # Save command line flags, model params and performance statistics
+    save_params(args, model, dict(), best_stats)
     
     return best_ccc
 

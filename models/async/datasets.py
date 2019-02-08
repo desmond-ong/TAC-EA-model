@@ -244,13 +244,15 @@ def load_dataset(modalities, base_dir, subset, target='ratings',
         'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
 #       'linguistic': os.path.join(base_dir, 'features', subset, 'word-level'),
         'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
-        'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
+        'ratings' : os.path.join(base_dir, 'ratings', subset, 'observer_avg')
+        # 'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
     }
     regex = {
         'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
         'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
-        'ratings' : "target_(\d+)_(\d+)_.*\.csv"
+        'ratings' : "results_(\d+)_(\d+)\.csv" #observer_avg
+        # 'ratings' : "target_(\d+)_(\d+)_normal\.csv" #target
     }
     preprocess = {
         # Drop frame ID
@@ -263,12 +265,16 @@ def load_dataset(modalities, base_dir, subset, target='ratings',
         # Only use action units, subsample from 30 Hz to 2 Hz
         'emotient': lambda df : (df.loc[:,'AU1':'AU43'],
                                  ((df['time'] % 0.5) < 0.03).nonzero()[0]),
+        # Rescale, keep only timestamps where ratings changed more than 0.05
+        'ratings' : lambda df : (df.drop(columns=['time']) / 50 - 1,
+                                 df['rating'].diff()\
+                                 .abs().ge(0.05).nonzero()[0])
         # Only keep timestamps where ratings stay constant for 3 frames
-        'ratings' : lambda df : (df.drop(columns=['time'])*2-1,
-                                 df[' rating'].groupby(
-                                     df[' rating'].diff().ne(0).cumsum()
-                                 ).transform('size').ge(3).astype(int)\
-                                 .diff().nonzero()[0])
+        # 'ratings' : lambda df : (df.drop(columns=['time'])*2-1,
+        #                          df[' rating'].groupby(
+        #                              df[' rating'].diff().ne(0).cumsum()
+        #                          ).transform('size').ge(3).astype(int)\
+        #                          .diff().nonzero()[0])
     }
     time_cols = {
         'acoustic': ' frameTime',
