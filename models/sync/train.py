@@ -153,7 +153,7 @@ def save_params(args, model, train_stats, test_stats):
     df['h_dim'] = model.h_dim
     df['attn_len'] = model.attn_len
     if type(model) is MultiARLSTM:
-        df['ar_order'] = [model.decay.item()]
+        df['ar_order'] = [model.ar_order]
     else:
         df['ar_order'] = [float('nan')]
     df.set_index('model')
@@ -209,9 +209,9 @@ def main(args):
     
     # Construct multimodal LSTM model
     dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
-    model = MultiLSTM(args.modalities,
-                      dims=(dims[m] for m in args.modalities),
-                      device=args.device)
+    model = MultiEDLSTM(args.modalities,
+                        dims=(dims[m] for m in args.modalities),
+                        device=args.device)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
 
