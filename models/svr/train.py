@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 
 from datasets import seq_collate_dict, load_dataset
 
+def moving_average(x, w):
+    return np.convolve(x, np.ones(w), 'same') / w
+
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
     true_mean = np.mean(y_true)
@@ -58,9 +61,10 @@ def train(train_data, test_data, args):
 
     # Set up hyper-parameters for support vector regression
     params = {
-        'gamma': ['auto'],
-        'C': [1e-3, 0.01, 0.03, 0.1, 0.3, 1.0],
-        'kernel': ['linear'] #['rbf']
+        # 'gamma': ['auto'],
+        'C': [1e-3, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 1e1, 3e1, 1e2, 3e2, 1e3],
+        'epsilon': [0.05, 0.1, 0.15, 0.2]
+        # 'kernel': ['rbf']
     }
     params = list(ParameterGrid(params))
 
@@ -70,10 +74,11 @@ def train(train_data, test_data, args):
         print("Using parameters:", p)
 
         # Train SVR on training set
-        print("Fitting SVR model...")
+        # print("Fitting SVR model...")
         # model = svm.SVR(kernel=p['kernel'], C=p['C'], gamma=p['gamma'],
         #                 epsilon=0.1, cache_size=1000, tol=1e-2)
-        model = svm.LinearSVR(epsilon=0.1, C=p['C'])
+        print("Fitting linear SVR model...")
+        model = svm.LinearSVR(**p)
         model.fit(X_train, y_train)
 
         # Evaluate on test set
@@ -127,6 +132,9 @@ def evaluate(model, test_data, args, fig_path=None):
                 y_pred = np.concatenate([avg, remain])
             else:
                 y_pred = avg
+
+        # Smoothing predictions via moving average
+        y_pred = moving_average(y_pred, args.sma)
                 
         ccc.append(eval_ccc(y_test, y_pred))
         predictions.append(y_pred)
@@ -221,6 +229,8 @@ if __name__ == "__main__":
                         help='modalities to normalize (default: [])')
     parser.add_argument('--visualize', action='store_true', default=False,
                         help='flag to visualize predictions (default: false)')
+    parser.add_argument('--sma', type=int, default=1, metavar='W',
+                        help='window size for moving average (default: 1)')
     parser.add_argument('--load', type=str, default=None,
                         help='path to trained model to evaluate')
     parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
