@@ -33,7 +33,7 @@ def load_data(modalities, data_dir, normalize=[]):
     train_data = load_dataset(modalities, data_dir, 'Train',
                               base_rate=args.base_rate,
                               truncate=True, item_as_dict=True)
-    test_data = load_dataset(modalities, data_dir, 'Valid',
+    test_data = load_dataset(modalities, data_dir, 'Test',
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
@@ -62,7 +62,8 @@ def train(train_data, test_data, args):
     # Set up hyper-parameters for support vector regression
     params = {
         # 'gamma': ['auto'],
-        'C': [1e-3, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 1e1, 3e1, 1e2, 3e2, 1e3],
+        'C': [1e-3, 3e-3, 0.01, 0.03, 0.1, 0.3,
+              1.0, 3.0, 1e1, 3e1, 1e2, 3e2, 1e3],
         'epsilon': [0.05, 0.1, 0.15, 0.2]
         # 'kernel': ['rbf']
     }
@@ -143,8 +144,9 @@ def evaluate(model, test_data, args, fig_path=None):
     if args.visualize:
         plot_predictions(test_data, predictions, ccc, args, fig_path)
         
+    ccc_std = np.std(ccc)
     ccc = np.mean(ccc)
-    print('CCC: {:0.3f}'.format(ccc))
+    print('CCC: {:0.3f} +-{:0.3f}'.format(ccc, ccc_std))
     return ccc, predictions
 
 def plot_predictions(dataset, predictions, metric, args, fig_path=None):
@@ -195,7 +197,10 @@ def main(args):
     
     if args.load is not None:
         # Load saved model
-        model = joblib.load(args.load)        
+        model = joblib.load(args.load)
+    elif args.test:
+        # Load best model in save directory
+        model = joblib.load(os.path.join(args.save_dir, "best.sav"))
     else:
         # Fit new model against training data, cross-val against test data
         _, _, model, _ = train(train_data, test_data, args)
@@ -233,6 +238,8 @@ if __name__ == "__main__":
                         help='window size for moving average (default: 1)')
     parser.add_argument('--load', type=str, default=None,
                         help='path to trained model to evaluate')
+    parser.add_argument('--test', action='store_true', default=False,
+                        help='evaluate without training (default: false)')
     parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
                         help='sampling rate to resample to (default: 2.0)')
     parser.add_argument('--data_dir', type=str, default="../../data",
