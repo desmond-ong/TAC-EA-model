@@ -249,8 +249,8 @@ def main(args):
     train_data, test_data = load_data(args.modalities, args.data_dir,
                                       args.normalize)
     
-    # Construct multimodal LSTM model
-    dims = {'acoustic': 988, 'linguistic': 300,
+    # Construct multimodal VRNN model
+    dims = {'acoustic': 88, 'linguistic': 300,
             'emotient': 20, 'ratings': 1}
     model = MultiVRNN(args.modalities + ['ratings'],
                       dims=(dims[m] for m in (args.modalities + ['ratings'])),
@@ -369,15 +369,16 @@ if __name__ == "__main__":
                         help='device to use (default: cuda:0 if available)')
     parser.add_argument('--visualize', action='store_true', default=False,
                         help='flag to visualize predictions (default: false)')
-    parser.add_argument('--normalize', type=str, default=[], nargs='+',
-                        help='modalities to normalize (default: [])')
+    parser.add_argument('--normalize',
+                        type=list, default=['acoustic'], nargs='+',
+                        help='modalities to normalize (default: acoustic)')
     parser.add_argument('--test', action='store_true', default=False,
                         help='evaluate without training (default: false)')
     parser.add_argument('--load', type=str, default=None,
                         help='path to trained model (either resume or test)')
     parser.add_argument('--data_dir', type=str, default="../../data",
                         help='path to data base directory')
-    parser.add_argument('--save_dir', type=str, default="./lstm_save",
+    parser.add_argument('--save_dir', type=str, default="./vrnn_save",
                         help='path to save models and predictions')
     args = parser.parse_args()
     main(args)

@@ -281,15 +281,15 @@ def load_dataset(modalities, base_dir, subset,
         'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
         'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
-        'ratings' : "results_(\d+)_(\d+)\.csv" #observer_avg
+        'ratings' : "results_(\d+)_(\d+)\.csv" #observer_EWE
         # 'ratings' : "target_(\d+)_(\d+)_normal\.csv" #target
     }
     rates = {'acoustic': 2, 'linguistic': 0.2, 'emotient': 30, 'ratings': 2}
     preprocess = {
         # Drop timestamps and frame indices
         'acoustic': lambda df : df.drop(columns=['name', ' frameTime']),
-        # Use only GloVe vectors
-        'linguistic': lambda df : df.loc[:,'glove0':'glove299'],
+        # Use only GloVe vectors, fill missing with zeros
+        'linguistic': lambda df : df.loc[:,'glove0':'glove299'].fillna(0),
         # Fill in missing emotient data with zeros, use only action units
         'emotient': lambda df : (df.set_index('Frametime')\
                                  .reindex(
@@ -300,7 +300,7 @@ def load_dataset(modalities, base_dir, subset,
                                      tolerance=1e-3, fill_value=0)\
                                  .reset_index().loc[:,'AU1':'AU43']),
         # Rescale from [0, 100] to [-1, 1]
-        'ratings' : lambda df : df.loc[:, 'evaluatorWeightedEstimate'] / 50 - 1
+        'ratings' : lambda df : df.loc[:, ['evaluatorWeightedEstimate']]/50 - 1
         # 'ratings' : lambda df : df.drop(columns=['time']) * 2 - 1 #target
     }
     if 'ratings' not in modalities:

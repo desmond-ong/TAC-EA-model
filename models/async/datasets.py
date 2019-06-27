@@ -238,27 +238,31 @@ def seq_collate_dict(data):
 def load_dataset(modalities, base_dir, subset, target='ratings',
                  time_tol=1.0/30, item_as_dict=False):
     """Helper function specifically for loading TAC-EA datasets."""
-   #  s_words = set(stopwords.words('english'))
+    #  s_words = set(stopwords.words('english'))
     dirs = {
-        'acoustic': os.path.join(base_dir, 'features', subset, 'acoustic'),
-        'linguistic': os.path.join(base_dir, 'features', subset, 'linguistic'),
-      # 'linguistic': os.path.join(base_dir, 'features', subset, 'word-level'),
-        'emotient': os.path.join(base_dir, 'features', subset, 'emotient'),
-        'ratings' : os.path.join(base_dir, 'ratings', subset, 'observer_avg')
+        'acoustic': os.path.join(base_dir, 'features',
+                                 subset, 'acoustic-egemaps'),
+        'linguistic': os.path.join(base_dir, 'features',
+                                   subset, 'linguistic'),
+        'emotient': os.path.join(base_dir, 'features',
+                                 subset, 'emotient'),
+        'ratings' : os.path.join(base_dir, 'ratings',
+                                 subset, 'observer_EWE')
         # 'ratings' : os.path.join(base_dir, 'ratings', subset, 'target')
     }
     regex = {
         'acoustic': "ID(\d+)_vid(\d+)_.*\.csv",
         'linguistic': "ID(\d+)_vid(\d+)_.*\.tsv",
         'emotient': "ID(\d+)_vid(\d+)_.*\.txt",
-        'ratings' : "results_(\d+)_(\d+)\.csv" #observer_avg
+        'ratings' : "results_(\d+)_(\d+)\.csv" #observer_EWE
         # 'ratings' : "target_(\d+)_(\d+)_normal\.csv" #target
     }
     preprocess = {
-        # Drop frame ID
-        'acoustic': lambda df : (df.drop(columns=['frameIndex']), None),
-        # Use only GloVe features
-        'linguistic': lambda df : (df.loc[:,'glove0':'glove299'], None),
+        # Drop file name
+        'acoustic': lambda df : (df.drop(columns=['name']), None),
+        # Use only GloVe features, fill missing with zeros
+        'linguistic': lambda df : (df.loc[:,'glove0':'glove299'].fillna(0),
+                                   None),
                                    # (~df['word'].str.lower()\
                                    #  .str.strip([',','.'])\
                                    #  .isin(s_words)).nonzero()[0]),
@@ -266,9 +270,9 @@ def load_dataset(modalities, base_dir, subset, target='ratings',
         'emotient': lambda df : (df.loc[:,'AU1':'AU43'],
                                  ((df['time'] % 0.5) < 0.03).nonzero()[0]),
         # Rescale, keep only timestamps where ratings changed more than 0.05
-        'ratings' : lambda df : (df.drop(columns=['time']) / 50 - 1,
-                                 df['rating'].diff()\
-                                 .abs().ge(0.05).nonzero()[0])
+        'ratings' : (lambda df :
+                     (df.loc[:, ['evaluatorWeightedEstimate']]/50 - 1,
+                      df['rating'].diff().abs().ge(0.05).nonzero()[0]) )
         # Only keep timestamps where ratings stay constant for 3 frames
         # 'ratings' : lambda df : (df.drop(columns=['time'])*2-1,
         #                          df[' rating'].groupby(
