@@ -33,7 +33,7 @@ def load_data(modalities, data_dir, normalize=[]):
     train_data = load_dataset(modalities, data_dir, 'Train',
                               base_rate=args.base_rate,
                               truncate=True, item_as_dict=True)
-    test_data = load_dataset(modalities, data_dir, 'Test',
+    test_data = load_dataset(modalities, data_dir, 'Valid',
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
