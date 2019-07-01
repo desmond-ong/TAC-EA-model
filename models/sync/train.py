@@ -21,6 +21,42 @@ from torch.utils.data import DataLoader
 from datasets import seq_collate_dict, load_dataset
 from models import MultiLSTM, MultiEDLSTM, MultiARLSTM
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--modalities', type=str, default=None, nargs='+',
+                    help='input modalities (default: all')
+parser.add_argument('--batch_size', type=int, default=25, metavar='N',
+                    help='input batch size for training (default: 25)')
+parser.add_argument('--split', type=int, default=1, metavar='N',
+                    help='sections to split each video into (default: 1)')
+parser.add_argument('--epochs', type=int, default=1000, metavar='N',
+                    help='number of epochs to train (default: 1000)')
+parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
+                    help='learning rate (default: 1e-5)')
+parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
+                    help='teacher-forcing ratio (default: 0.5)')
+parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
+                    help='sampling rate to resample to (default: 2.0)')
+parser.add_argument('--log_freq', type=int, default=5, metavar='N',
+                    help='print loss N times every epoch (default: 5)')
+parser.add_argument('--eval_freq', type=int, default=1, metavar='N',
+                    help='evaluate every N epochs (default: 1)')
+parser.add_argument('--save_freq', type=int, default=10, metavar='N',
+                    help='save every N epochs (default: 10)')
+parser.add_argument('--device', type=str, default='cuda:0',
+                    help='device to use (default: cuda:0 if available)')
+parser.add_argument('--visualize', action='store_true', default=False,
+                    help='flag to visualize predictions (default: false)')
+parser.add_argument('--normalize', action='store_true', default=False,
+                    help='whether to normalize inputs (default: false)')
+parser.add_argument('--test', action='store_true', default=False,
+                    help='evaluate without training (default: false)')
+parser.add_argument('--load', type=str, default=None,
+                    help='path to trained model (either resume or test)')
+parser.add_argument('--data_dir', type=str, default="../../data",
+                    help='path to data base directory')
+parser.add_argument('--save_dir', type=str, default="./lstm_save",
+                    help='path to save models and predictions')
+
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
     true_mean = np.mean(y_true)
@@ -167,7 +203,7 @@ def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device)
     return checkpoint
 
-def load_data(modalities, data_dir):
+def load_data(modalities, data_dir, args):
     print("Loading data...")
     train_data = load_dataset(modalities, data_dir, 'Train',
                               base_rate=args.base_rate,
@@ -178,7 +214,7 @@ def load_data(modalities, data_dir):
     print("Done.")
     return train_data, test_data
 
-def main(args):
+def main(args, reporter=None):
     # Fix random seed
     torch.manual_seed(1)
     torch.cuda.manual_seed(1)
@@ -205,10 +241,10 @@ def main(args):
         args.modalities = ['acoustic', 'linguistic', 'emotient']
 
     # Load data for specified modalities
-    train_data, test_data = load_data(args.modalities, args.data_dir)
+    train_data, test_data = load_data(args.modalities, args.data_dir, args)
     
     # Construct multimodal LSTM model
-    dims = {'acoustic': 988, 'linguistic': 300, 'emotient': 20}
+    dims = {'acoustic': 88, 'linguistic': 300, 'emotient': 20}
     model = MultiEDLSTM(args.modalities,
                         dims=(dims[m] for m in args.modalities),
                         device=args.device)
@@ -265,6 +301,12 @@ def main(args):
             with torch.no_grad():
                 pred, loss, stats =\
                     evaluate(test_data, model, criterion, args)
+            # Report loss and epoch if Ray Tune reporter is given
+            if reporter is not None:
+                reporter(mean_loss=loss.item(),
+                         mean_ccc=stats['ccc'].item(),
+                         training_iteration=epoch,
+                         done=np.isnan(loss.item()))
             if stats['ccc'] > best_ccc:
                 best_ccc = stats['ccc']
                 best_stats = stats
@@ -282,44 +324,25 @@ def main(args):
 
     # Save command line flags, model params and performance statistics
     save_params(args, model, dict(), best_stats)
+
+    # Report final loss and epoch if Ray Tune reporter is given
+    if reporter is not None:
+        reporter(mean_loss=loss.item(),
+                 mean_ccc=stats['ccc'].item(),
+                 training_iteration=epoch,
+                 done=True)
     
     return best_ccc
 
+def tuner(config, reporter):
+    """Run experiments in parallel using Ray Tune."""
+    # Set up parameter namespace with default arguments
+    args = parser.parse_args([])
+    # Override with arguments provided by Tune
+    vars(args).update(config)
+    # Run trial
+    main(args, reporter)    
+        
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--modalities', type=str, default=None, nargs='+',
-                        help='input modalities (default: all')
-    parser.add_argument('--batch_size', type=int, default=25, metavar='N',
-                        help='input batch size for training (default: 25)')
-    parser.add_argument('--split', type=int, default=1, metavar='N',
-                        help='sections to split each video into (default: 1)')
-    parser.add_argument('--epochs', type=int, default=1000, metavar='N',
-                        help='number of epochs to train (default: 1000)')
-    parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
-                        help='learning rate (default: 1e-5)')
-    parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
-                        help='teacher-forcing ratio (default: 0.5)')
-    parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
-                        help='sampling rate to resample to (default: 2.0)')
-    parser.add_argument('--log_freq', type=int, default=5, metavar='N',
-                        help='print loss N times every epoch (default: 5)')
-    parser.add_argument('--eval_freq', type=int, default=1, metavar='N',
-                        help='evaluate every N epochs (default: 1)')
-    parser.add_argument('--save_freq', type=int, default=10, metavar='N',
-                        help='save every N epochs (default: 10)')
-    parser.add_argument('--device', type=str, default='cuda:0',
-                        help='device to use (default: cuda:0 if available)')
-    parser.add_argument('--visualize', action='store_true', default=False,
-                        help='flag to visualize predictions (default: false)')
-    parser.add_argument('--normalize', action='store_true', default=False,
-                        help='whether to normalize inputs (default: false)')
-    parser.add_argument('--test', action='store_true', default=False,
-                        help='evaluate without training (default: false)')
-    parser.add_argument('--load', type=str, default=None,
-                        help='path to trained model (either resume or test)')
-    parser.add_argument('--data_dir', type=str, default="../../data",
-                        help='path to data base directory')
-    parser.add_argument('--save_dir', type=str, default="./lstm_save",
-                        help='path to save models and predictions')
     args = parser.parse_args()
     main(args)

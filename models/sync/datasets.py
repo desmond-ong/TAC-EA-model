@@ -300,7 +300,7 @@ def load_dataset(modalities, base_dir, subset,
                                      tolerance=1e-3, fill_value=0)\
                                  .reset_index().loc[:,'AU1':'AU43']),
         # Rescale from [0, 100] to [-1, 1]
-        'ratings' : lambda df : df.loc[:, ['evaluatorWeightedEstimate']] / 50-1
+        'ratings' : lambda df : df.loc[:,['evaluatorWeightedEstimate']]/50 - 1
         # 'ratings' : lambda df : df.drop(columns=['time']) * 2 - 1 #target
     }
     if 'ratings' not in modalities:
