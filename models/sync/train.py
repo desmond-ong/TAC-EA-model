@@ -282,7 +282,7 @@ def main(args, reporter=None):
             save_predictions(test_data, pred, pred_test_dir)
         # Save command line flags, model params and CCC value
         save_params(args, model, train_stats, test_stats)
-        return train_stats['ccc'], test_stats['ccc']
+        return train_stats, test_stats
 
     # Split training data into chunks
     train_data = train_data.split(args.split)
@@ -296,22 +296,25 @@ def main(args, reporter=None):
     best_stats = dict()
     for epoch in range(1, args.epochs + 1):
         print('---')
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train_loss = train(train_loader, model, criterion,
+                           optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
                 pred, loss, stats =\
                     evaluate(test_data, model, criterion, args)
-            # Report loss and epoch if Ray Tune reporter is given
-            if reporter is not None:
-                reporter(mean_loss=loss.item(),
-                         mean_ccc=stats['ccc'].item(),
-                         training_iteration=epoch,
-                         done=np.isnan(loss.item()))
             if stats['ccc'] > best_ccc:
                 best_ccc = stats['ccc']
                 best_stats = stats
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
+            # Report loss and epoch if Ray Tune reporter is given
+            if reporter is not None:
+                reporter(mean_loss=loss.item(),
+                         mean_ccc=stats['ccc'].item(),
+                         best_ccc=best_ccc.item(),
+                         train_loss=train_loss.item(),
+                         training_iteration=epoch,
+                         done=np.isnan(loss.item()))
         # Save checkpoints
         if epoch % args.save_freq == 0:
             path = os.path.join(args.save_dir,
@@ -329,6 +332,8 @@ def main(args, reporter=None):
     if reporter is not None:
         reporter(mean_loss=loss.item(),
                  mean_ccc=stats['ccc'].item(),
+                 best_ccc=best_ccc.item(),
+                 train_loss=train_loss.item(),
                  training_iteration=epoch,
                  done=True)
     
