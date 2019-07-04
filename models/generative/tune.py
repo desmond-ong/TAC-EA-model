@@ -31,7 +31,7 @@ parser.add_argument('--data_dir', type=str, default="../../data",
                     help='path to data base directory')
 parser.add_argument('--local_dir', type=str, default="./",
                     help='path to Ray results')
-parser.add_argument('--exp_name', type=str, default="lstm_tune",
+parser.add_argument('--exp_name', type=str, default="vrnn_tune",
                     help='experiment name')
 parser.add_argument('--config', type=yaml.safe_load, default={},
                     help='trial configuration arguments')
@@ -59,7 +59,7 @@ def run(args):
     # Generate all possible combinations of modalities
     mod_combs = powerset(['acoustic', 'linguistic', 'emotient'])
     mod_combs = [list(mods) for mods in mod_combs if len(mods) > 0]
-
+    
     # Set up trial configuration
     config = {
         "data_dir": data_dir,

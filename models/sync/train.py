@@ -139,8 +139,8 @@ def evaluate(dataset, model, criterion, args, fig_path=None):
     # Average losses and print
     loss /= data_num
     # Average statistics and print
-    stats = {'corr': np.mean(corr), 'corr_std': np.std(corr),
-             'ccc': np.mean(ccc), 'ccc_std': np.std(ccc)}
+    stats = {'corr': np.mean(corr).item(), 'corr_std': np.std(corr).item(),
+             'ccc': np.mean(ccc).item(), 'ccc_std': np.std(ccc).item()}
     print('Evaluation\tLoss: {:2.5f}\tCorr: {:0.3f}\tCCC: {:0.3f}'.\
           format(loss, stats['corr'], stats['ccc']))
     return predictions, loss, stats
@@ -302,6 +302,7 @@ def main(args, reporter=None):
             with torch.no_grad():
                 pred, loss, stats =\
                     evaluate(test_data, model, criterion, args)
+            # Remember best model and statistics
             if stats['ccc'] > best_ccc:
                 best_ccc = stats['ccc']
                 best_stats = stats
@@ -309,12 +310,14 @@ def main(args, reporter=None):
                 save_checkpoint(args.modalities, model, path)
             # Report loss and epoch if Ray Tune reporter is given
             if reporter is not None:
+                report_stats = dict(stats)
+                report_stats.update({'best_' + k: v for k, v
+                                     in best_stats.iteritems()})
                 reporter(mean_loss=loss.item(),
-                         mean_ccc=stats['ccc'].item(),
-                         best_ccc=best_ccc.item(),
                          train_loss=train_loss.item(),
                          training_iteration=epoch,
-                         done=np.isnan(loss.item()))
+                         done=np.isnan(loss.item()),
+                         **report_stats)
         # Save checkpoints
         if epoch % args.save_freq == 0:
             path = os.path.join(args.save_dir,
@@ -331,11 +334,10 @@ def main(args, reporter=None):
     # Report final loss and epoch if Ray Tune reporter is given
     if reporter is not None:
         reporter(mean_loss=loss.item(),
-                 mean_ccc=stats['ccc'].item(),
-                 best_ccc=best_ccc.item(),
                  train_loss=train_loss.item(),
                  training_iteration=epoch,
-                 done=True)
+                 done=np.isnan(loss.item()),
+                 **report_stats)
     
     return best_ccc
 

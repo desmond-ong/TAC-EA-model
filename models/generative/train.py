@@ -21,6 +21,53 @@ from torch.utils.data import DataLoader
 from datasets import seq_collate_dict, load_dataset
 from models import MultiVRNN
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--modalities', type=str, default=None, nargs='+',
+                    help='input modalities (default: all')
+parser.add_argument('--batch_size', type=int, default=50, metavar='N',
+                    help='input batch size for training (default: 50)')
+parser.add_argument('--split', type=int, default=5, metavar='N',
+                    help='sections to split each video into (default: 5)')
+parser.add_argument('--epochs', type=int, default=1000, metavar='N',
+                    help='number of epochs to train (default: 1000)')
+parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
+                    help='learning rate (default: 1e-5)')
+parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
+                    help='teacher-forcing ratio (default: 0.5)')
+parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
+                    help='sampling rate to resample to (default: 2.0)')
+parser.add_argument('--kld_mult', type=float, default=1.0, metavar='F',
+                    help='max kld loss multiplier (default: 1.0)')
+parser.add_argument('--sup_mult', type=float, default=10, metavar='F',
+                    help='max supervised loss multiplier (default: 10)')
+parser.add_argument('--rec_mults', type=float, default=None, nargs='+',
+                    help='reconstruction loss multiplier (default: 1/dims')
+parser.add_argument('--kld_anneal', type=int, default=100, metavar='N',
+                    help='epochs to increase kld_mult over (default: 100)')
+parser.add_argument('--sup_anneal', type=int, default=100, metavar='N',
+                    help='epochs to increase sup_mult over (default: 100)')
+parser.add_argument('--log_freq', type=int, default=5, metavar='N',
+                    help='print loss N times every epoch (default: 5)')
+parser.add_argument('--eval_freq', type=int, default=10, metavar='N',
+                    help='evaluate every N epochs (default: 10)')
+parser.add_argument('--save_freq', type=int, default=10, metavar='N',
+                    help='save every N epochs (default: 10)')
+parser.add_argument('--device', type=str, default='cuda:0',
+                    help='device to use (default: cuda:0 if available)')
+parser.add_argument('--visualize', action='store_true', default=False,
+                    help='flag to visualize predictions (default: false)')
+parser.add_argument('--normalize',
+                    type=list, default=['acoustic'], nargs='+',
+                    help='modalities to normalize (default: acoustic)')
+parser.add_argument('--test', action='store_true', default=False,
+                    help='evaluate without training (default: false)')
+parser.add_argument('--load', type=str, default=None,
+                    help='path to trained model (either resume or test)')
+parser.add_argument('--data_dir', type=str, default="../../data",
+                    help='path to data base directory')
+parser.add_argument('--save_dir', type=str, default="./vrnn_save",
+                    help='path to save models and predictions')
+
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
     true_mean = np.mean(y_true)
@@ -139,12 +186,13 @@ def evaluate(dataset, model, args, fig_path=None):
     kld_loss /= data_num
     rec_loss /= data_num
     sup_loss /= data_num
-    losses = kld_loss, rec_loss, sup_loss
+    tot_loss = args.kld_mult * kld_loss + rec_loss + args.sup_mult * sup_loss
+    losses = tot_loss, kld_loss, rec_loss, sup_loss
     print('Evaluation\tKLD: {:7.1f}\tRecon: {:7.1f}\tSup: {:7.1f}'.\
-          format(*losses))
+          format(*losses[1:]))
     # Average statistics and print
-    stats = {'corr': np.mean(corr), 'corr_std': np.std(corr),
-             'ccc': np.mean(ccc), 'ccc_std': np.std(ccc)}
+    stats = {'corr': np.mean(corr).item(), 'corr_std': np.std(corr).item(),
+             'ccc': np.mean(ccc).item(), 'ccc_std': np.std(ccc).item()}
     print('Corr: {:0.3f}\tCCC: {:0.3f}'.format(stats['corr'], stats['ccc']))
     return predictions, losses, stats
 
@@ -202,7 +250,7 @@ def load_checkpoint(path, device):
     checkpoint = torch.load(path, map_location=device)
     return checkpoint
 
-def load_data(modalities, data_dir, normalize=[]):
+def load_data(modalities, data_dir, normalize, args):
     print("Loading data...")
     train_data = load_dataset(modalities, data_dir, 'Train',
                               base_rate=args.base_rate,
@@ -211,6 +259,7 @@ def load_data(modalities, data_dir, normalize=[]):
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
+    normalize = [m for m in normalize if m in modalities]
     if len(normalize) > 0:
         print("Normalizing ", normalize, "...")
         # Normalize test data using training data as reference
@@ -219,7 +268,7 @@ def load_data(modalities, data_dir, normalize=[]):
         train_data.normalize_(modalities=normalize)
     return train_data, test_data
 
-def main(args):
+def main(args, reporter=None):
     # Fix random seed
     torch.manual_seed(1)
     torch.cuda.manual_seed(1)
@@ -247,7 +296,7 @@ def main(args):
 
     # Load data for specified modalities
     train_data, test_data = load_data(args.modalities, args.data_dir,
-                                      args.normalize)
+                                      args.normalize, args)
     
     # Construct multimodal VRNN model
     dims = {'acoustic': 88, 'linguistic': 300,
@@ -309,16 +358,31 @@ def main(args):
     best_stats = dict()
     for epoch in range(1, args.epochs + 1):
         print('---')
-        train(train_loader, model, optimizer, epoch, args)
+        train_loss = train(train_loader, model, optimizer, epoch, args)
         if epoch % args.eval_freq == 0:
             with torch.no_grad():
-                pred, loss, stats =\
+                pred, losses, stats =\
                     evaluate(test_data, model, args)
+            # Remember best model and statistics
             if stats['ccc'] > best_ccc:
                 best_ccc = stats['ccc']
                 best_stats = stats
                 path = os.path.join(args.save_dir, "best.pth") 
                 save_checkpoint(args.modalities, model, path)
+            # Report loss and epoch if Ray Tune reporter is given
+            if reporter is not None:
+                report_stats = dict(stats)
+                report_stats.update({'best_' + k: v for k, v
+                                     in best_stats.iteritems()})
+                tot_loss, kld_loss, rec_loss, sup_loss = losses
+                reporter(mean_loss=tot_loss.item(),
+                         kld_loss=kld_loss.item(),
+                         rec_loss=rec_loss.item(),
+                         sup_loss=sup_loss.item(),
+                         train_loss=train_loss.item(),
+                         training_iteration=epoch,
+                         done=np.isnan(train_loss.item()),
+                         **report_stats)
         # Save checkpoints
         if epoch % args.save_freq == 0:
             path = os.path.join(args.save_dir, "epoch_{}.pth".format(epoch)) 
@@ -330,55 +394,29 @@ def main(args):
 
     # Save command line flags, model params and performance statistics
     save_params(args, model, dict(), best_stats)
+
+    # Report final loss and epoch if Ray Tune reporter is given
+    if reporter is not None:
+        reporter(mean_loss=tot_loss.item(),
+                 kld_loss=kld_loss.item(),
+                 rec_loss=rec_loss.item(),
+                 sup_loss=sup_loss.item(),
+                 train_loss=train_loss.item(),
+                 training_iteration=epoch,
+                 done=True,
+                 **report_stats)
     
     return best_ccc
 
+def tuner(config, reporter):
+    """Run experiments in parallel using Ray Tune."""
+    # Set up parameter namespace with default arguments
+    args = parser.parse_args([])
+    # Override with arguments provided by Tune
+    vars(args).update(config)
+    # Run trial
+    main(args, reporter)    
+        
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--modalities', type=str, default=None, nargs='+',
-                        help='input modalities (default: all')
-    parser.add_argument('--batch_size', type=int, default=25, metavar='N',
-                        help='input batch size for training (default: 25)')
-    parser.add_argument('--split', type=int, default=1, metavar='N',
-                        help='sections to split each video into (default: 1)')
-    parser.add_argument('--epochs', type=int, default=1000, metavar='N',
-                        help='number of epochs to train (default: 1000)')
-    parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
-                        help='learning rate (default: 1e-5)')
-    parser.add_argument('--sup_ratio', type=float, default=0.5, metavar='F',
-                        help='teacher-forcing ratio (default: 0.5)')
-    parser.add_argument('--base_rate', type=float, default=2.0, metavar='N',
-                        help='sampling rate to resample to (default: 2.0)')
-    parser.add_argument('--kld_mult', type=float, default=1.0, metavar='F',
-                        help='max kld loss multiplier (default: 1.0)')
-    parser.add_argument('--sup_mult', type=float, default=100, metavar='F',
-                        help='max supervised loss multiplier (default: 100)')
-    parser.add_argument('--rec_mults', type=float, default=None, nargs='+',
-                        help='reconstruction loss multiplier (default: 1/dims')
-    parser.add_argument('--kld_anneal', type=int, default=500, metavar='N',
-                        help='epochs to increase kld_mult over (default: 500)')
-    parser.add_argument('--sup_anneal', type=int, default=1e3, metavar='N',
-                        help='epochs to increase sup_mult over (default: 1e3)')
-    parser.add_argument('--log_freq', type=int, default=5, metavar='N',
-                        help='print loss N times every epoch (default: 5)')
-    parser.add_argument('--eval_freq', type=int, default=1, metavar='N',
-                        help='evaluate every N epochs (default: 1)')
-    parser.add_argument('--save_freq', type=int, default=10, metavar='N',
-                        help='save every N epochs (default: 10)')
-    parser.add_argument('--device', type=str, default='cuda:0',
-                        help='device to use (default: cuda:0 if available)')
-    parser.add_argument('--visualize', action='store_true', default=False,
-                        help='flag to visualize predictions (default: false)')
-    parser.add_argument('--normalize',
-                        type=list, default=['acoustic'], nargs='+',
-                        help='modalities to normalize (default: acoustic)')
-    parser.add_argument('--test', action='store_true', default=False,
-                        help='evaluate without training (default: false)')
-    parser.add_argument('--load', type=str, default=None,
-                        help='path to trained model (either resume or test)')
-    parser.add_argument('--data_dir', type=str, default="../../data",
-                        help='path to data base directory')
-    parser.add_argument('--save_dir', type=str, default="./vrnn_save",
-                        help='path to save models and predictions')
     args = parser.parse_args()
     main(args)
