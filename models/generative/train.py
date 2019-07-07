@@ -344,7 +344,7 @@ def main(args, reporter=None):
             save_predictions(test_data, pred, pred_test_dir)
         # Save command line flags, model params and CCC value
         save_params(args, model, train_stats, test_stats)
-        return train_stats['ccc'], test_stats['ccc']
+        return train_stats, test_stats
 
     # Split training data into chunks
     train_data = train_data.split(args.split)

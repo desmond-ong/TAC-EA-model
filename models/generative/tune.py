@@ -91,6 +91,9 @@ def analyze(args):
     # Iterate across trials
     for trial in ea._checkpoints:
         print("Trial:", trial['experiment_tag'])
+        if (trial['status'] == 'ERROR'):
+            print("Skipping due to error.")
+            continue
         config = trial['config']
         trial_dir = os.path.basename(trial['logdir'])
         trial_dir = os.path.join(exp_dir, trial_dir)
