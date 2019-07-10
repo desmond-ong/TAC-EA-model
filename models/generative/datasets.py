@@ -198,6 +198,32 @@ class MultiseqDataset(Dataset):
         dataset = copy.deepcopy(self)
         dataset.split_(n)
         return dataset
+
+    def unravel_(self, mod):
+        """Unravels columns in specified modality, creating a new 
+           sequence for each column."""
+        new_data = {m: [] for m in self.modalities}
+        new_seq_ids = []
+        for i in range(len(self.seq_ids)):
+            n_cols = self.data[mod][i].shape[1]
+            for col in range(n_cols):
+                for m in self.modalities:
+                    if m == mod:
+                        # Select column from specified modality
+                        new_data[mod].append(self.data[mod][i][:,col:col+1])
+                    else:
+                        # Copy data for other modalities
+                        new_data[m].append(self.data[m][i])
+            new_seq_ids += n_cols * [self.seq_ids[i]]
+        self.data = new_data
+        self.seq_ids = new_seq_ids
+        self.lengths = [len(d) for d in self.data[mod]]
+            
+    def unravel(self, mod):
+        """Unravels columns in specified modality (return new dataset)."""
+        dataset = copy.deepcopy(self)
+        dataset.unravel_(mod)
+        return dataset
             
     @classmethod
     def merge(cls, set1, set2):
@@ -270,7 +296,8 @@ def seq_collate_dict(data, time_first=True):
     return batch, mask, lengths
 
 def load_dataset(modalities, base_dir, subset,
-                 base_rate=None, truncate=False, item_as_dict=False):
+                 base_rate=None, truncate=False, item_as_dict=False,
+                 ratings_info=None):
     """Helper function specifically for loading TAC-EA datasets."""
     dirs = {
         'acoustic': os.path.join(base_dir, 'features',
@@ -311,11 +338,35 @@ def load_dataset(modalities, base_dir, subset,
     }
     if 'ratings' not in modalities:
         modalities = modalities + ['ratings']
+    # Override load options for ratings, if provided
+    if ratings_info is not None:
+        if 'dirs' in ratings_info:
+            dirs['ratings'] = ratings_info['dirs']
+        if 'regex' in ratings_info:
+            regex['ratings'] = ratings_info['regex']
+        if 'rates' in ratings_info:
+            rates['ratings'] = ratings_info['rates']
+        if 'preprocess' in ratings_info:
+            preprocess['ratings'] = ratings_info['preprocess']
     return MultiseqDataset(modalities, [dirs[m] for m in modalities],
                            [regex[m] for m in modalities],
                            [preprocess[m] for m in modalities],
                            [rates[m] for m in modalities],
                            base_rate, truncate, item_as_dict)
+
+def load_dataset_multi(modalities, base_dir, subset,
+                       base_rate=None, truncate=False, item_as_dict=False):    
+    """Helper function to load dataset with multiple observer ratings."""
+    ratings_info = {
+        'dirs' : os.path.join(base_dir, 'ratings', subset, 'observer'),
+        'regex' : "results_(\d+)_(\d+)\.csv",
+        'preprocess' : lambda df : df.drop(columns=['workerID']) / 50 - 1
+    }
+    dataset = load_dataset(modalities, base_dir, subset,
+                           base_rate, truncate, item_as_dict, ratings_info)
+    # Unravel ratings columns so that each observer has one sequence
+    dataset.unravel_('ratings')
+    return dataset
 
 if __name__ == "__main__":
     # Test code by loading dataset
