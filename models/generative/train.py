@@ -18,7 +18,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from datasets import seq_collate_dict, load_dataset
+from datasets import seq_collate_dict, load_dataset, load_dataset_multi
 from models import MultiVRNN
 
 parser = argparse.ArgumentParser()
@@ -59,6 +59,8 @@ parser.add_argument('--visualize', action='store_true', default=False,
 parser.add_argument('--normalize',
                     type=list, default=['acoustic'], nargs='+',
                     help='modalities to normalize (default: acoustic)')
+parser.add_argument('--multi_obs', action='store_true', default=False,
+                    help='train on multiple observer ratings (default: false)')
 parser.add_argument('--test', action='store_true', default=False,
                     help='evaluate without training (default: false)')
 parser.add_argument('--load', type=str, default=None,
@@ -252,10 +254,15 @@ def load_checkpoint(path, device):
 
 def load_data(modalities, data_dir, normalize, args):
     print("Loading data...")
-    train_data = load_dataset(modalities, data_dir, 'Train',
-                              base_rate=args.base_rate,
-                              truncate=True, item_as_dict=True)
-    test_data = load_dataset(modalities, data_dir, 'Valid',
+    if args.multi_obs:
+        train_data = load_dataset_multi(modalities, data_dir, 'Train',
+                                        base_rate=args.base_rate,
+                                        truncate=True, item_as_dict=True)
+    else:
+        train_data = load_dataset(modalities, data_dir, 'Train',
+                                  base_rate=args.base_rate,
+                                  truncate=True, item_as_dict=True)
+    test_data = load_dataset(modalities, data_dir, 'Test',
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
