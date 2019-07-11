@@ -60,7 +60,7 @@ def train(train_data, test_data, args):
 
     # Set up hyper-parameters for support vector regression
     params = {
-        'n_components': [10]
+        'n_components': [5, 10, 20, 40]
     }
     params = list(ParameterGrid(params))
 
@@ -109,7 +109,6 @@ def evaluate(model, test_data, args, fig_path=None):
 
         # Infer most likely hidden states
         _, state_path = model.viterbi(Xy_test)
-        print(len(state_path), len(X_test))
         # Predict most likely ratings (Gaussian mean) from states
         y_pred = [state.distribution.parameters[0][-1]
                   for i, state in state_path[1:]]
