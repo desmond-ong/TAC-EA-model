@@ -4,8 +4,9 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
 
-import os
-import joblib
+import os, joblib
+from itertools import chain, combinations
+
 import pandas as pd
 import numpy as np
 
@@ -17,6 +18,11 @@ from datasets import seq_collate_dict, load_dataset
 
 def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'same') / w
+
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -124,7 +130,7 @@ def train(train_data, test_data, args):
         
         # Fit HMM to training set
         print("Fitting HMM to training data...")
-        for trial in range(100):
+        for trial in range(50):
             np.random.seed(None)
             model = build_model(n_bins, n_cmps, n_features,
                                 X_means, X_stds, state_names)
@@ -137,12 +143,13 @@ def train(train_data, test_data, args):
             continue    
             
         # Save model to file
-        path = "mods={},n_bins={},n_cmps={}.json".\
-               format(str(args.modalities), n_bins, n_cmps)
+        path = "n_bins={},n_cmps={}.json".\
+               format(n_bins, n_cmps)
         with open(path ,'w+') as model_file:
             model_file.write(model.to_json())
         
         # Evaluate on test set
+        args.partition = 'test'
         ccc, predictions = evaluate(model, test_data, args)
 
         # Save best parameters and model
@@ -204,6 +211,9 @@ def evaluate(model, test_data, args, fig_path=None):
                 
         ccc.append(eval_ccc(y_test, y_pred))
         predictions.append(y_pred)
+
+    # Save metrics per sequence
+    save_metrics(test_data, ccc, args)
         
     # Visualize predictions
     if args.visualize:
@@ -245,6 +255,19 @@ def save_predictions(dataset, predictions, path):
         df = pd.DataFrame(p, columns=['rating'])
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
+
+def save_metrics(dataset, metrics, args):
+    results = {
+        'model' : ['LSTM'] * len(dataset),
+        'modalities' : [args.modalities] * len(dataset),
+        'vidID' : ['{}_{}'.format(*s) for s in dataset.seq_ids],
+        'partition' : args.partition,
+        'CCC' : metrics
+    }
+    df = pd.DataFrame(results, columns=['model', 'modalities', 'vidID', 'CCC'])
+    path = 'metrics_{}.csv'.format(args.partition)
+    path = os.path.join(args.save_dir, path)
+    df.to_csv(path, index=False)
         
 def main(args):
     # Construct modality names if not provided
@@ -285,10 +308,12 @@ def main(args):
 
     # Evaluate model on training and test set
     print("-Training-")
+    args.partition = 'train'
     ccc1, pred = evaluate(model, train_data, args,
                           os.path.join(args.save_dir, "train.png"))
     save_predictions(train_data, pred, pred_train_dir)
     print("-Testing-")
+    args.partition = 'test'
     ccc2, pred = evaluate(model, test_data, args,
                           os.path.join(args.save_dir, "test.png"))
     save_predictions(test_data, pred, pred_test_dir)
@@ -297,6 +322,8 @@ def main(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--mod_combs', action='store_true', default=False,
+                        help='iterate across all mod. combs. (default: false)')
     parser.add_argument('--modalities', type=str, default=None, nargs='+',
                         help='input modalities (default: all)')
     parser.add_argument('--normalize', type=str, default=[], nargs='+',
@@ -316,4 +343,15 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', type=str, default="./hmm_save",
                         help='path to save models and predictions')
     args = parser.parse_args()
-    main(args)
+
+    if args.mod_combs:    
+        # Generate all possible combinations of modalities
+        mod_combs = powerset(['acoustic', 'linguistic', 'emotient'])
+        mod_combs = [list(mods) for mods in mod_combs if len(mods) > 0]
+        base_dir = args.save_dir
+        for modalities in mod_combs:
+            args.modalities = modalities
+            args.save_dir = os.path.join(base_dir, str(modalities))
+            main(args)
+    else:
+        main(args)
