@@ -45,6 +45,43 @@ def load_data(modalities, data_dir, normalize=[]):
         train_data.normalize_(modalities=normalize)
     return train_data, test_data
 
+def build_model(n_bins, n_cmps, n_features, means, stds, state_names=None):
+    # Initial values for all Gaussian components
+    dist_init = np.random.random((n_bins, n_cmps, n_features, 2))
+    dist_init[..., 0] -= 0.5  # Center means to 0.0
+    for feat_i in range(n_features):
+        # Random init mean in range [-2std, 2std)
+        dist_init[..., feat_i, 0] *= 4 * stds[feat_i]
+        dist_init[..., feat_i, 0] += means[feat_i]
+        # Random init std in range [0, std)
+        dist_init[..., feat_i, 1] *= stds[feat_i]
+
+    if n_cmps > 1:
+        dists = tuple(
+            pgn.GeneralMixtureModel(list(
+                pgn.IndependentComponentsDistribution(tuple(
+                    pgn.NormalDistribution(*dist_init[bin_i, cmp_i, feat_i, :])
+                    for feat_i in range(n_features))
+                )
+                for cmp_i in range(n_cmps))
+            )
+            for bin_i in range(n_bins)
+        )
+    else: 
+        dists = tuple(
+            pgn.IndependentComponentsDistribution(tuple(
+                pgn.NormalDistribution(*dist_init[bin_i, 0, feat_i, :])
+                for feat_i in range(n_features))
+            )
+            for bin_i in range(n_bins)
+        )
+    trans_mat = np.random.random((n_bins, n_bins))
+    starts = np.ones(n_bins)
+    
+    model = pgn.HiddenMarkovModel.from_matrix(trans_mat, dists, starts,
+                                              state_names=state_names)
+    return model
+
 def train(train_data, test_data, args):
     # Concatenate across input modalities for each training sequence
     X_train = [np.concatenate([seq[m] for m in args.modalities], axis=1)
@@ -52,20 +89,22 @@ def train(train_data, test_data, args):
     
     # Compute means and stds for each input feature
     X_concat = np.concatenate(X_train, axis=0)
-    means = np.nanmean(X_concat, axis=0)
-    stds = np.nanstd(X_concat, axis=0)
-    n_features = means.shape[0]
-    
-    # Zero-mask missing input values
-    for seq in X_train:
-        seq[np.isnan(seq)] = 0.0
+    X_means = np.nanmean(X_concat, axis=0)
+    X_stds = np.nanstd(X_concat, axis=0)
+    n_features = X_means.shape[0]
 
     # Extract ratings as target outputs to fit against
     y_train = [seq['ratings'] for seq in train_data]
+    
+    # Zero-mask missing values
+    for x_seq, y_seq in zip(X_train, y_train):
+        x_seq[np.isnan(x_seq)] = 0.0
+        y_seq[np.isnan(y_seq)] = 0.0
 
     # Set up hyper-parameters for support vector regression
     params = {
-        'n_bins': [2, 5, 10]
+        'n_bins': [2, 4, 5, 8],
+        'n_cmps': [1, 2, 3]
     }
     params = list(ParameterGrid(params))
 
@@ -74,6 +113,7 @@ def train(train_data, test_data, args):
     for p in params:
         print("Using parameters:", p)
         n_bins = p['n_bins']
+        n_cmps = p['n_cmps']
 
         # Bin ratings into discrete categories
         bins = np.arange(-1.0, 1.0, 2.0 / n_bins)
@@ -82,36 +122,23 @@ def train(train_data, test_data, args):
         labels = [list(seq.astype(str)) for seq in labels]
         state_names = [str(b + 1.0/(n_bins)) for b in bins]
         
-        print("Initializing HMM with multivariate Gaussian emissions...""")
-        
-        # Initial values for all Gaussian components
-        np.random.seed(None)
-        dist_init = np.random.random((n_bins, n_features, 2))
-        dist_init[..., 0] -= 0.5  # Center means to 0.0
-        for feat_i in range(n_features):
-            # Random init mean in range [-2std, 2std)
-            dist_init[..., feat_i, 0] *= 4 * stds[feat_i]
-            dist_init[..., feat_i, 0] += means[feat_i]
-            # Random init std in range [0, std)
-            dist_init[..., feat_i, 1] *= stds[feat_i]
-        
-        dists = tuple(
-            pgn.IndependentComponentsDistribution(tuple(
-                pgn.NormalDistribution(*dist_init[bin_i, feat_i, :])
-                for feat_i in range(n_features)
-            ))
-            for bin_i in range(n_bins))
-        trans_mat = np.random.random((n_bins, n_bins))
-        starts = np.ones(n_bins)
-        model = pgn.HiddenMarkovModel.from_matrix(trans_mat, dists, starts,
-                                                  state_names=state_names)
-        
         # Fit HMM to training set
         print("Fitting HMM to training data...")
-        model = model.fit(X_train, labels=labels, verbose=True)
-
+        for trial in range(100):
+            np.random.seed(None)
+            model = build_model(n_bins, n_cmps, n_features,
+                                X_means, X_stds, state_names)
+            model, history = model.fit(X_train, labels=labels,
+                                       inertia=0.2, stop_threshold=0.1,
+                                       verbose=True, return_history=True)
+            if not np.isnan(history.total_improvement[-1]):
+                break
+        else:
+            continue    
+            
         # Save model to file
-        path = os.path.join(args.save_dir, "n_bins={}.json".format(n_bins))
+        path = "mods={},n_bins={},n_cmps={}.json".\
+               format(str(args.modalities), n_bins, n_cmps)
         with open(path ,'w+') as model_file:
             model_file.write(model.to_json())
         
@@ -173,7 +200,7 @@ def evaluate(model, test_data, args, fig_path=None):
                 y_pred = avg
 
         # Smoothing predictions via moving average
-        # y_pred = moving_average(y_pred, args.sma)
+        y_pred = moving_average(y_pred, args.sma)
                 
         ccc.append(eval_ccc(y_test, y_pred))
         predictions.append(y_pred)

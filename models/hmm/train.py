@@ -15,6 +15,21 @@ import matplotlib.pyplot as plt
 
 from datasets import seq_collate_dict, load_dataset
 
+class IndependentGaussianDistribution(IndependentComponentsDistribution):
+    """Helper class to create multivariate Gaussian with diagonal covariance"""
+    @classmethod
+    def from_samples(cls, X, weights=None, distribution_weights=None,
+                     pseudocount=0.0):
+        n, d = X.shape
+        distributions = [NormalDistribution for i in range(d)]
+        super(IndependentGaussianDistribution, cls).from_samples(
+            X, weights, distribution_weights, pseudocount, distributions)
+
+    @classmethod
+    def blank(cls, d=2):
+        distributions = [NormalDistribution.blank() for i in range(d)]
+        return IndependentComponentsDistribution(distributions)
+        
 def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'same') / w
 
@@ -60,7 +75,7 @@ def train(train_data, test_data, args):
 
     # Set up hyper-parameters for support vector regression
     params = {
-        'n_components': [5, 10, 20, 40]
+        'n_states': [3, 5, 7, 9]
     }
     params = list(ParameterGrid(params))
 
@@ -68,13 +83,20 @@ def train(train_data, test_data, args):
     best_ccc = -1
     for p in params:
         print("Using parameters:", p)
+        n_states = p['n_states']
 
         # Learn HMM from training set
         print("Learning HMM from training data...")
         model = HiddenMarkovModel.\
                 from_samples(MultivariateGaussianDistribution,
-                             X=Xy_train, verbose=True, **p)
+                             n_components=n_states, X=Xy_train, verbose=True)
 
+        # Save model to file
+        path = os.path.join(args.save_dir,
+                            "n_states={}.json".format(n_states))
+        with open(path ,'w+') as model_file:
+            model_file.write(model.to_json())
+        
         # Evaluate on test set
         ccc, predictions = evaluate(model, test_data, args)
 
@@ -200,13 +222,13 @@ def main(args):
             model = HiddenMarkovModel.from_json(model_file.read())
     elif args.test:
         # Load best model in save directory
-        with open(os.path.join(args.save_dir, "best.sav"), 'r') as model_file:
+        with open(os.path.join(args.save_dir, "best.json"), 'r') as model_file:
             model = HiddenMarkovModel.from_json(model_file.read())
     else:
         # Fit new model against training data, cross-val against test data
         _, _, model, _ = train(train_data, test_data, args)
         model_json = model.to_json()
-        with open(os.path.join(args.save_dir, "best.sav"), 'w+') as model_file:
+        with open(os.path.join(args.save_dir, "best.json"),'w+') as model_file:
             model_file.write(model_json)
 
     # Create paths to save predictions
