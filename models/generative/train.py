@@ -184,6 +184,8 @@ def evaluate(dataset, model, args, fig_path=None):
     # Plot predictions against ratings
     if args.visualize:
         plot_predictions(dataset, predictions, ccc, args, fig_path)
+    # Save metrics per sequence
+    save_metrics(dataset, ccc, args)
     # Average losses and print
     kld_loss /= data_num
     rec_loss /= data_num
@@ -226,6 +228,19 @@ def save_predictions(dataset, predictions, path):
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
 
+def save_metrics(dataset, metrics, args):
+    results = {
+        'model' : ['VRNN'] * len(dataset),
+        'modalities' : [args.modalities] * len(dataset),
+        'vidID' : ['{}_{}'.format(*s) for s in dataset.seq_ids],
+        'partition' : args.partition,
+        'CCC' : metrics
+    }
+    df = pd.DataFrame(results, columns=['model', 'modalities', 'vidID', 'CCC'])
+    path = 'metrics_{}.csv'.format(args.partition)
+    path = os.path.join(args.save_dir, path)
+    df.to_csv(path, index=False)
+        
 def save_params(args, model, train_stats, test_stats):
     fname = 'param_hist.tsv'
     df = pd.DataFrame([vars(args)], columns=vars(args).keys())
@@ -342,10 +357,12 @@ def main(args, reporter=None):
         # Evaluate on both training and test set
         with torch.no_grad():
             print("--Training--")
+            args.partition = 'train'
             pred, _, train_stats = evaluate(train_data, model, args,
                 os.path.join(args.save_dir, "train.png"))
             save_predictions(train_data, pred, pred_train_dir)
             print("--Testing--")
+            args.partition = 'test'
             pred, _, test_stats = evaluate(test_data, model, args,
                 os.path.join(args.save_dir, "test.png"))
             save_predictions(test_data, pred, pred_test_dir)

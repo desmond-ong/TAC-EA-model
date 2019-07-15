@@ -85,6 +85,7 @@ def analyze(args):
     exp_dir = os.path.join(args.local_dir, args.exp_name)
     ea = ExperimentAnalysis(exp_dir)
     df = ea.dataframe()
+    seq_metrics = []
     best_train_stats = []
     best_test_stats = []
     
@@ -114,12 +115,20 @@ def analyze(args):
         best_train_stats.append(train_stats)
         best_test_stats.append(test_stats)
 
+        # Load per-sequence metrics
+        metrics_path = os.path.join(eval_args.save_dir, 'metrics_test.csv')
+        seq_metrics.append(pd.read_csv(metrics_path, header=0))
+        
     # Add to dataframe and save
     train_df = pd.DataFrame(best_train_stats)
     test_df = pd.DataFrame(best_test_stats)
     df = pd.concat([df, train_df, test_df], axis=1)
     df = df.sort_values(['experiment_tag'])
     df.to_csv(os.path.join(exp_dir, 'analysis.csv'), index=False)
+
+    # Combine sequence metrics and save
+    seq_metrics = pd.concat(seq_metrics)
+    seq_metrics.to_csv(os.path.join(exp_dir, 'seq_metrics.csv'), index=False)
 
 if __name__ == "__main__":
     args = parser.parse_args()
