@@ -259,7 +259,7 @@ def save_predictions(dataset, predictions, path):
 
 def save_metrics(dataset, metrics, args):
     results = {
-        'model' : ['LSTM'] * len(dataset),
+        'model' : ['HMM'] * len(dataset),
         'modalities' : [args.modalities] * len(dataset),
         'vidID' : ['{}_{}'.format(*s) for s in dataset.seq_ids],
         'partition' : args.partition,
