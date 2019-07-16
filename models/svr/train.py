@@ -4,8 +4,9 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
 
-import os
-import joblib
+import os, joblib
+from itertools import chain, combinations
+
 import pandas as pd
 import numpy as np
 
@@ -17,6 +18,11 @@ from datasets import seq_collate_dict, load_dataset
 
 def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'same') / w
+
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -107,7 +113,7 @@ def evaluate(model, test_data, args, fig_path=None):
     # Predict and evaluate on each test sequence
     print("Evaluating...")
     for i, seq in enumerate(test_data):
-        # Contatenate input modalities
+        # Concatenate input modalities
         X_test = np.concatenate([seq[m] for m in args.modalities], axis=1)
         X_test[np.isnan(X_test)] = 0.0
         # Get ground truth ratings
@@ -243,10 +249,39 @@ def main(args):
                           os.path.join(args.save_dir, "test.png"))
     save_predictions(test_data, pred, pred_test_dir)
     return ccc1, ccc2
+
+def mod_iterate(args):
+    # Generate all possible combinations of modalities
+    mod_combs = powerset(['acoustic', 'linguistic', 'emotient'])
+    mod_combs = [list(mods) for mods in mod_combs if len(mods) > 0]
+    base_dir = args.save_dir
+    seq_metrics = []
     
+    for modalities in mod_combs:
+        print("===")
+        print("Modalities: {}".format(modalities))
+        print("===")
+
+        # Set modality, create subdirectory for each modality combination
+        args.modalities = modalities
+        args.save_dir = os.path.join(base_dir, str(modalities))
+
+        # Run main function with modality
+        main(args)
+
+        # Load per-sequence metrics
+        metrics_path = os.path.join(args.save_dir, 'metrics_test.csv')
+        seq_metrics.append(pd.read_csv(metrics_path, header=0))
+
+    # Concatenate and save per-sequence metrics
+    seq_metrics = pd.concat(seq_metrics)
+    seq_metrics.to_csv(os.path.join(base_dir, 'seq_metrics.csv'), index=False)
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--mod_combs', action='store_true', default=False,
+                        help='iterate across all mod. combs. (default: false)')
     parser.add_argument('--modalities', type=str, default=None, nargs='+',
                         help='input modalities (default: all)')
     parser.add_argument('--normalize', type=str, default=[], nargs='+',
@@ -266,4 +301,8 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', type=str, default="./svr_save",
                         help='path to save models and predictions')
     args = parser.parse_args()
-    main(args)
+
+    if args.mod_combs:
+        mod_iterate(args)
+    else:
+        main(args)

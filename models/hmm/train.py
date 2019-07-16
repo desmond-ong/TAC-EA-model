@@ -4,34 +4,25 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
 
-import os
-import joblib
+import os, joblib
+from itertools import chain, combinations
+
 import pandas as pd
 import numpy as np
 
-from pomegranate import *
+import pomegranate as pgn
 from sklearn.model_selection import ParameterGrid
 import matplotlib.pyplot as plt
 
 from datasets import seq_collate_dict, load_dataset
 
-class IndependentGaussianDistribution(IndependentComponentsDistribution):
-    """Helper class to create multivariate Gaussian with diagonal covariance"""
-    @classmethod
-    def from_samples(cls, X, weights=None, distribution_weights=None,
-                     pseudocount=0.0):
-        n, d = X.shape
-        distributions = [NormalDistribution for i in range(d)]
-        super(IndependentGaussianDistribution, cls).from_samples(
-            X, weights, distribution_weights, pseudocount, distributions)
-
-    @classmethod
-    def blank(cls, d=2):
-        distributions = [NormalDistribution.blank() for i in range(d)]
-        return IndependentComponentsDistribution(distributions)
-        
 def moving_average(x, w):
     return np.convolve(x, np.ones(w), 'same') / w
+
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
 
 def eval_ccc(y_true, y_pred):
     """Computes concordance correlation coefficient."""
@@ -52,6 +43,7 @@ def load_data(modalities, data_dir, normalize=[]):
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
+    normalize = [m for m in normalize if m in modalities]
     if len(normalize) > 0:
         print("Normalizing ", normalize, "...")
         # Normalize test data using training data as reference
@@ -60,22 +52,66 @@ def load_data(modalities, data_dir, normalize=[]):
         train_data.normalize_(modalities=normalize)
     return train_data, test_data
 
+def build_model(n_bins, n_cmps, n_features, means, stds, state_names=None):
+    # Initial values for all Gaussian components
+    dist_init = np.random.random((n_bins, n_cmps, n_features, 2))
+    dist_init[..., 0] -= 0.5  # Center means to 0.0
+    for feat_i in range(n_features):
+        # Random init mean in range [-2std, 2std)
+        dist_init[..., feat_i, 0] *= 4 * stds[feat_i]
+        dist_init[..., feat_i, 0] += means[feat_i]
+        # Random init std in range [0, std)
+        dist_init[..., feat_i, 1] *= stds[feat_i]
+
+    if n_cmps > 1:
+        dists = tuple(
+            pgn.GeneralMixtureModel(list(
+                pgn.IndependentComponentsDistribution(tuple(
+                    pgn.NormalDistribution(*dist_init[bin_i, cmp_i, feat_i, :])
+                    for feat_i in range(n_features))
+                )
+                for cmp_i in range(n_cmps))
+            )
+            for bin_i in range(n_bins)
+        )
+    else: 
+        dists = tuple(
+            pgn.IndependentComponentsDistribution(tuple(
+                pgn.NormalDistribution(*dist_init[bin_i, 0, feat_i, :])
+                for feat_i in range(n_features))
+            )
+            for bin_i in range(n_bins)
+        )
+    trans_mat = np.random.random((n_bins, n_bins))
+    starts = np.ones(n_bins)
+    
+    model = pgn.HiddenMarkovModel.from_matrix(trans_mat, dists, starts,
+                                              state_names=state_names)
+    return model
+
 def train(train_data, test_data, args):
     # Concatenate across input modalities for each training sequence
     X_train = [np.concatenate([seq[m] for m in args.modalities], axis=1)
                for seq in train_data]
+    
+    # Compute means and stds for each input feature
+    X_concat = np.concatenate(X_train, axis=0)
+    X_means = np.nanmean(X_concat, axis=0)
+    X_stds = np.nanstd(X_concat, axis=0)
+    n_features = X_means.shape[0]
+
     # Extract ratings as target outputs to fit against
     y_train = [seq['ratings'] for seq in train_data]
-    # Concatenate inputs with targets for each sequence
-    Xy_train = [np.concatenate([X_seq, y_seq], axis=1)
-                for X_seq, y_seq in zip(X_train, y_train)]
+    
     # Zero-mask missing values
-    # X_train[np.isnan(X_train)] = 0.0
-    # y_train[np.isnan(y_train)] = 0.0
+    for x_seq, y_seq in zip(X_train, y_train):
+        x_seq[np.isnan(x_seq)] = 0.0
+        y_seq[np.isnan(y_seq)] = 0.0
 
     # Set up hyper-parameters for support vector regression
     params = {
-        'n_states': [3, 5, 7, 9]
+        'n_bins': [2, 4, 5, 8],
+        'n_cmps': [1, 2, 3]
     }
     params = list(ParameterGrid(params))
 
@@ -83,21 +119,38 @@ def train(train_data, test_data, args):
     best_ccc = -1
     for p in params:
         print("Using parameters:", p)
-        n_states = p['n_states']
+        n_bins = p['n_bins']
+        n_cmps = p['n_cmps']
 
-        # Learn HMM from training set
-        print("Learning HMM from training data...")
-        model = HiddenMarkovModel.\
-                from_samples(MultivariateGaussianDistribution,
-                             n_components=n_states, X=Xy_train, verbose=True)
-
+        # Bin ratings into discrete categories
+        bins = np.arange(-1.0, 1.0, 2.0 / n_bins)
+        labels = [np.digitize(seq.flatten(), bins[1:])
+                  for seq in y_train]
+        labels = [list(seq.astype(str)) for seq in labels]
+        state_names = [str(b + 1.0/(n_bins)) for b in bins]
+        
+        # Fit HMM to training set
+        print("Fitting HMM to training data...")
+        for trial in range(50):
+            np.random.seed(None)
+            model = build_model(n_bins, n_cmps, n_features,
+                                X_means, X_stds, state_names)
+            model, history = model.fit(X_train, labels=labels,
+                                       inertia=0.2, stop_threshold=0.1,
+                                       verbose=True, return_history=True)
+            if not np.isnan(history.total_improvement[-1]):
+                break
+        else:
+            continue    
+            
         # Save model to file
-        path = os.path.join(args.save_dir,
-                            "n_states={}.json".format(n_states))
+        path = "n_bins={},n_cmps={}.json".format(n_bins, n_cmps)
+        path = os.path.join(args.save_dir, path)
         with open(path ,'w+') as model_file:
             model_file.write(model.to_json())
         
         # Evaluate on test set
+        args.partition = 'test'
         ccc, predictions = evaluate(model, test_data, args)
 
         # Save best parameters and model
@@ -130,10 +183,9 @@ def evaluate(model, test_data, args, fig_path=None):
         y_test = test_data.orig['ratings'][i].flatten()
 
         # Infer most likely hidden states
-        _, state_path = model.viterbi(Xy_test)
-        # Predict most likely ratings (Gaussian mean) from states
-        y_pred = [state.distribution.parameters[0][-1]
-                  for i, state in state_path[1:]]
+        _, state_path = model.viterbi(X_test)
+        # Convert state names to continuous ratings
+        y_pred = [float(state.name) for i, state in state_path[1:]]
 
         # Ensure predictions and ground truth are at same sampling rate
         if test_data.ratios['ratings'] >= 1:
@@ -156,10 +208,13 @@ def evaluate(model, test_data, args, fig_path=None):
                 y_pred = avg
 
         # Smoothing predictions via moving average
-        # y_pred = moving_average(y_pred, args.sma)
+        y_pred = moving_average(y_pred, args.sma)
                 
         ccc.append(eval_ccc(y_test, y_pred))
         predictions.append(y_pred)
+
+    # Save metrics per sequence
+    save_metrics(test_data, ccc, args)
         
     # Visualize predictions
     if args.visualize:
@@ -201,6 +256,19 @@ def save_predictions(dataset, predictions, path):
         df = pd.DataFrame(p, columns=['rating'])
         fname = "target_{}_{}_normal.csv".format(*seq_id)
         df.to_csv(os.path.join(path, fname), index=False)
+
+def save_metrics(dataset, metrics, args):
+    results = {
+        'model' : ['HMM'] * len(dataset),
+        'modalities' : [args.modalities] * len(dataset),
+        'vidID' : ['{}_{}'.format(*s) for s in dataset.seq_ids],
+        'partition' : args.partition,
+        'CCC' : metrics
+    }
+    df = pd.DataFrame(results, columns=['model', 'modalities', 'vidID', 'CCC'])
+    path = 'metrics_{}.csv'.format(args.partition)
+    path = os.path.join(args.save_dir, path)
+    df.to_csv(path, index=False)
         
 def main(args):
     # Construct modality names if not provided
@@ -219,11 +287,11 @@ def main(args):
     if args.load is not None:
         # Load saved model
         with open(args.load, 'r') as model_file:
-            model = HiddenMarkovModel.from_json(model_file.read())
+            model = pgn.HiddenMarkovModel.from_json(model_file.read())
     elif args.test:
         # Load best model in save directory
         with open(os.path.join(args.save_dir, "best.json"), 'r') as model_file:
-            model = HiddenMarkovModel.from_json(model_file.read())
+            model = pgn.HiddenMarkovModel.from_json(model_file.read())
     else:
         # Fit new model against training data, cross-val against test data
         _, _, model, _ = train(train_data, test_data, args)
@@ -241,18 +309,49 @@ def main(args):
 
     # Evaluate model on training and test set
     print("-Training-")
+    args.partition = 'train'
     ccc1, pred = evaluate(model, train_data, args,
                           os.path.join(args.save_dir, "train.png"))
     save_predictions(train_data, pred, pred_train_dir)
     print("-Testing-")
+    args.partition = 'test'
     ccc2, pred = evaluate(model, test_data, args,
                           os.path.join(args.save_dir, "test.png"))
     save_predictions(test_data, pred, pred_test_dir)
     return ccc1, ccc2
+
+def mod_iterate(args):
+    # Generate all possible combinations of modalities
+    mod_combs = powerset(['acoustic', 'linguistic', 'emotient'])
+    mod_combs = [list(mods) for mods in mod_combs if len(mods) > 0]
+    base_dir = args.save_dir
+    seq_metrics = []
     
+    for modalities in mod_combs:
+        print("===")
+        print("Modalities: {}".format(modalities))
+        print("===")
+
+        # Set modality, create subdirectory for each modality combination
+        args.modalities = modalities
+        args.save_dir = os.path.join(base_dir, str(modalities))
+
+        # Run main function with modality
+        main(args)
+
+        # Load per-sequence metrics
+        metrics_path = os.path.join(args.save_dir, 'metrics_test.csv')
+        seq_metrics.append(pd.read_csv(metrics_path, header=0))
+
+    # Concatenate and save per-sequence metrics
+    seq_metrics = pd.concat(seq_metrics)
+    seq_metrics.to_csv(os.path.join(base_dir, 'seq_metrics.csv'), index=False)
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--mod_combs', action='store_true', default=False,
+                        help='iterate across all mod. combs. (default: false)')
     parser.add_argument('--modalities', type=str, default=None, nargs='+',
                         help='input modalities (default: all)')
     parser.add_argument('--normalize', type=str, default=[], nargs='+',
@@ -272,4 +371,8 @@ if __name__ == "__main__":
     parser.add_argument('--save_dir', type=str, default="./hmm_save",
                         help='path to save models and predictions')
     args = parser.parse_args()
-    main(args)
+
+    if args.mod_combs:
+        mod_iterate(args)
+    else:
+        main(args)
