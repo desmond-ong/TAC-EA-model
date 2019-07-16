@@ -43,6 +43,7 @@ def load_data(modalities, data_dir, normalize=[]):
                              base_rate=args.base_rate,
                              truncate=True, item_as_dict=True)
     print("Done.")
+    normalize = [m for m in normalize if m in modalities]
     if len(normalize) > 0:
         print("Normalizing ", normalize, "...")
         # Normalize test data using training data as reference
@@ -143,8 +144,8 @@ def train(train_data, test_data, args):
             continue    
             
         # Save model to file
-        path = "n_bins={},n_cmps={}.json".\
-               format(n_bins, n_cmps)
+        path = "n_bins={},n_cmps={}.json".format(n_bins, n_cmps)
+        path = os.path.join(args.save_dir, path)
         with open(path ,'w+') as model_file:
             model_file.write(model.to_json())
         
