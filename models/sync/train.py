@@ -313,6 +313,7 @@ def main(args, reporter=None):
     # Train and save best model
     best_ccc = -1
     best_stats = dict()
+    args.partition = 'test'
     for epoch in range(1, args.epochs + 1):
         print('---')
         train_loss = train(train_loader, model, criterion,
